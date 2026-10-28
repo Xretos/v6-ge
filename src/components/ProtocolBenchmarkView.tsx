@@ -143,6 +143,43 @@ export const ProtocolBenchmarkView: React.FC = () => {
         </div>
       </div>
 
+      {/* Multi-packet File Transfer Protocol Section */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-white flex items-center gap-2 border-b border-slate-800 pb-2">
+          <Terminal className="w-4 h-4 text-emerald-400" />
+          <span>多包分卷文件传输协议规范 (Multi-Packet File Transfer Protocol)</span>
+        </h3>
+
+        <div className="text-xs text-slate-300 leading-relaxed space-y-3">
+          <p>
+            为在 100~300 bps 的受限物理层上安全传输任意本地文件（JSON 配置、CSV 表格、传感器数据、公钥证书等），系统在链路层之上定义了分卷拼装应用协议：
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="text-cyan-400 font-bold mb-1 font-mono">1. FILE_START (启动帧)</div>
+              <p className="text-slate-400 text-[11px]">
+                载荷采用 JSON 编码：<code>{`{"name": filename, "size": bytes, "chunks": N, "mime": mime}`}</code>。接收端预先分配内存缓冲并初始化分卷索引槽位。
+              </p>
+            </div>
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="text-emerald-400 font-bold mb-1 font-mono">2. FILE_DATA (分卷数据帧)</div>
+              <p className="text-slate-400 text-[11px]">
+                二进制头：<code>[ChunkIdx (2B BE), TotalChunks (2B BE)] + SliceData</code>。单卷切片大小可配置（推荐 48 字节），支持任意顺序重组。
+              </p>
+            </div>
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <div className="text-amber-400 font-bold mb-1 font-mono">3. FILE_END (结束与校验)</div>
+              <p className="text-slate-400 text-[11px]">
+                载荷包含整体文件完整性 CRC-16：<code>{`{"name": filename, "size": bytes, "crc": crc16}`}</code>。接收端完成所有切片拼接后比对全文件哈希，无缝生成 Object URL 提供下载。
+              </p>
+            </div>
+          </div>
+          <div className="bg-slate-950/80 p-2.5 rounded border border-slate-800 text-[11px] text-slate-400">
+            💡 <b>保护静音间隔 (Inter-Chunk Guard Gap)：</b> 每帧发送完毕后插入 80ms 静音缓冲，使接收端硬件麦克风的放大器电平与 AGC 恢复平稳，并重置符号锁相环状态，杜绝前帧尾音干扰后帧前导码。
+          </div>
+        </div>
+      </div>
+
       {/* Adaptive Sample Rate */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-3">
         <h3 className="text-sm font-semibold text-white flex items-center gap-2 border-b border-slate-800 pb-2">

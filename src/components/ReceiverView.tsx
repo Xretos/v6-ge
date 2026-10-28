@@ -4,8 +4,31 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Mic, MicOff, Activity, ExternalLink, ShieldAlert, CheckCircle, AlertTriangle, Trash2, Cpu, BarChart2 } from 'lucide-react';
-import { FSKDemodulator, DecodedPacket, DEFAULT_CONFIG } from '../dsp/fsk';
+import {
+  Mic,
+  MicOff,
+  Activity,
+  ExternalLink,
+  CheckCircle,
+  AlertTriangle,
+  Trash2,
+  BarChart2,
+  Download,
+  FileCheck,
+  FileText,
+  FileUp,
+  Package,
+  Eye,
+  EyeOff
+} from 'lucide-react';
+import {
+  FSKDemodulator,
+  DecodedPacket,
+  FileAssembler,
+  AssembledFile,
+  FileProgress,
+  PacketType
+} from '../dsp/fsk';
 
 interface ReceiverViewProps {
   sampleRate: number;
@@ -26,6 +49,11 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
   const [corruptedCount, setCorruptedCount] = useState<number>(0);
   const [totalFecCorrections, setTotalFecCorrections] = useState<number>(0);
 
+  // File Transfer State
+  const [activeFileProgress, setActiveFileProgress] = useState<FileProgress | null>(null);
+  const [receivedFiles, setReceivedFiles] = useState<AssembledFile[]>([]);
+  const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+
   // Audio nodes & Canvas refs
   const waveCanvasRef = useRef<HTMLCanvasElement>(null);
   const specCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,15 +62,10 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
   const analyserRef = useRef<AnalyserNode | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const demodulatorRef = useRef<FSKDemodulator | null>(null);
+  const fileAssemblerRef = useRef<FileAssembler | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
-  // Audio ring buffer for streaming demodulation
-  const ringBufferRef = useRef<Float32Array>(new Float32Array(48000));
-  const writeIdxRef = useRef<number>(0);
-  const totalSamplesRef = useRef<number>(0);
-  const lastProcessedRef = useRef<number>(0);
-
-  // Initialize demodulator
+  // Initialize demodulator and file assembler
   useEffect(() => {
     const demod = new FSKDemodulator({
       sampleRate,
@@ -60,19 +83,22 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     });
 
     demodulatorRef.current = demod;
-  }, [sampleRate, baudRate]);
 
-  // Support direct synthetic audio injection (from loopback tab or tests)
-  useEffect(() => {
-    if (syntheticAudioFeed && demodulatorRef.current) {
-      const decodedPackets = demodulatorRef.current.processAudioBuffer(syntheticAudioFeed);
-      if (decodedPackets.length > 0) {
-        for (const pkt of decodedPackets) {
-          handleNewPacket(pkt);
-        }
-      }
-    }
-  }, [syntheticAudioFeed]);
+    // File assembler
+    const assembler = new FileAssembler();
+    assembler.onProgress = (prog) => {
+      setActiveFileProgress({ ...prog });
+      setStatusMessage(`正在接收文件 [${prog.name}]: 分卷 ${prog.receivedChunks}/${prog.totalChunks} (${prog.percent}%)`);
+    };
+
+    assembler.onComplete = (file) => {
+      setReceivedFiles((prev) => [file, ...prev]);
+      setActiveFileProgress(null);
+      setStatusMessage(`✓ 文件 [${file.name}] 已成功重组接收完毕 (${file.size} 字节，CRC-16 校验 ${file.crcValid ? '通过' : '失败'})`);
+    };
+
+    fileAssemblerRef.current = assembler;
+  }, [sampleRate, baudRate]);
 
   const handleNewPacket = useCallback((pkt: DecodedPacket) => {
     setPackets((prev) => [pkt, ...prev.slice(0, 49)]);
@@ -84,7 +110,24 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     if (pkt.fecCorrections > 0) {
       setTotalFecCorrections((prev) => prev + pkt.fecCorrections);
     }
+
+    // Feed to File Assembler
+    if (fileAssemblerRef.current && pkt.crcValid) {
+      fileAssemblerRef.current.processPacket(pkt);
+    }
   }, []);
+
+  // Support direct synthetic audio injection (from loopback tab or tests)
+  useEffect(() => {
+    if (syntheticAudioFeed && demodulatorRef.current) {
+      const decodedPackets = demodulatorRef.current.processAudioBuffer(syntheticAudioFeed);
+      if (decodedPackets.length > 0) {
+        for (const pkt of decodedPackets) {
+          handleNewPacket(pkt);
+        }
+      }
+    }
+  }, [syntheticAudioFeed, handleNewPacket]);
 
   // Visualizer loop for Oscilloscope & Spectrum
   const startVisualizer = useCallback(() => {
@@ -139,7 +182,6 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
       let barX = 0;
       for (let i = 0; i < freqData.length / 2; i++) {
         const barHeight = (freqData[i] / 255) * sHeight;
-        // Highlight 1200Hz and 2200Hz bins in cyan
         const isMarkSpaceBin = (i >= 20 && i <= 30) || (i >= 42 && i <= 54);
         specCtx.fillStyle = isMarkSpaceBin ? '#06b6d4' : '#1e293b';
         specCtx.fillRect(barX, sHeight - barHeight, barWidth - 1, barHeight);
@@ -169,8 +211,6 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     render();
   }, []);
 
-
-
   // Start hardware microphone / line-in capture
   const startListening = async () => {
     try {
@@ -178,7 +218,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
       const actx = new AudioCtx();
       audioCtxRef.current = actx;
 
-      // Essential: disable AEC, AGC, and NS to preserve raw FSK audio waveform
+      // Disable AEC, AGC, and NS to preserve raw FSK audio waveform
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: false,
@@ -275,9 +315,9 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
             <Activity className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-white">FSK 解调与接收工作台</h2>
+            <h2 className="text-sm font-semibold text-white">FSK 解调与数据/文件接收工作台</h2>
             <p className="text-xs text-slate-400">
-              通过 3.5mm 麦克风输入采集模拟音频信号，实施正交匹配滤波解调与前向纠错 (Hamming 7,4)
+              通过 3.5mm 麦克风输入采集模拟音频信号，实施正交匹配滤波解调、Hamming(7,4) 纠错与多包文件重组
             </p>
           </div>
         </div>
@@ -320,7 +360,8 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                 <select
                   value={baudRate}
                   onChange={(e) => setBaudRate(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  disabled={isListening}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 disabled:opacity-60"
                 >
                   <option value={100}>100 bps (标准强抗噪)</option>
                   <option value={150}>150 bps (均衡)</option>
@@ -331,11 +372,11 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  纠错模式 (FEC Mode)
+                  纠错与文件重组机制
                 </label>
                 <div className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono text-emerald-400 flex items-center justify-between">
                   <span>Hamming(7,4) + CRC-16</span>
-                  <span className="text-[10px] text-slate-500">双层防护</span>
+                  <span className="text-[10px] text-cyan-400">支持文件自动重组</span>
                 </div>
               </div>
             </div>
@@ -394,6 +435,33 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
             </div>
           </div>
 
+          {/* ACTIVE INCOMING FILE PROGRESS CARD */}
+          {activeFileProgress && (
+            <div className="bg-cyan-950/40 border border-cyan-800/80 rounded-xl p-4 shadow-md space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-cyan-300">
+                  <Package className="w-4 h-4 animate-bounce" />
+                  <span className="text-xs font-semibold">正在接收并拼接文件: {activeFileProgress.name}</span>
+                </div>
+                <span className="text-xs font-mono text-cyan-300 font-bold">
+                  {activeFileProgress.receivedChunks} / {activeFileProgress.totalChunks} 分卷 ({activeFileProgress.percent}%)
+                </span>
+              </div>
+
+              <div className="h-2.5 w-full bg-slate-900 rounded-full overflow-hidden border border-cyan-900/60">
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-150"
+                  style={{ width: `${activeFileProgress.percent}%` }}
+                />
+              </div>
+
+              <div className="flex justify-between items-center text-[11px] text-slate-400 font-mono">
+                <span>已接收载荷: {activeFileProgress.receivedBytes} / {activeFileProgress.totalBytes} 字节</span>
+                <span className="text-cyan-400">正在等待后续分卷音频...</span>
+              </div>
+            </div>
+          )}
+
           {/* Real-time Oscilloscope & Frequency Spectrum */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -415,7 +483,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
               <div>
                 <div className="flex justify-between text-[11px] text-slate-400 mb-1">
                   <span>接收端时域波形 (Time Domain Oscilloscope)</span>
-                  <span className="font-mono text-emerald-400">采样周期自适应</span>
+                  <span className="font-mono text-emerald-400">连续相位采样自适应</span>
                 </div>
                 <div className="rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
                   <canvas ref={waveCanvasRef} className="w-full h-28 block" />
@@ -435,7 +503,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
           </div>
         </div>
 
-        {/* Right Column: Statistics & Message Log */}
+        {/* Right Column: Statistics, Received Files & Message Log */}
         <div className="lg:col-span-5 space-y-5">
           {/* Loss & Reliability Stats */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
@@ -455,7 +523,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
               <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-3">
                 <div className="text-[11px] text-slate-500">前向纠错纠偏次数 (FEC)</div>
                 <div className="text-lg font-mono font-bold text-cyan-400 mt-1 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                  <FileCheck className="w-4 h-4 text-cyan-400" />
                   <span>{totalFecCorrections}</span>
                 </div>
               </div>
@@ -475,11 +543,87 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                 </div>
               </div>
             </div>
-
-            <div className="text-[11px] text-slate-400 leading-relaxed bg-slate-950/60 p-3 rounded-lg border border-slate-800">
-              <b>纠错机制说明：</b> 采用 Hamming(7,4) 线性分组前向纠错码。每个数据半字节编码为 7 位码字，接收端通过校验伴随式 (Syndrome S) 能够准确定位并自动纠正任意 1 位错码；若多位错码超出纠错范围，则由 CRC-16 校验码拦截并记录为丢包。
-            </div>
           </div>
+
+          {/* COMPLETED RECEIVED FILES DRAWER */}
+          {receivedFiles.length > 0 && (
+            <div className="bg-slate-900/80 border border-emerald-800/60 rounded-xl p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <FileCheck className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-white">已成功重组接收的文件 ({receivedFiles.length})</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReceivedFiles([])}
+                  className="text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
+                >
+                  清空文件
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {receivedFiles.map((file, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3.5 bg-slate-950 rounded-lg border border-slate-800 space-y-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>{file.name}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          {file.size} 字节 · {file.receivedChunks}/{file.totalChunks} 分卷 · {new Date(file.timestamp).toLocaleTimeString()}
+                        </div>
+                      </div>
+
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                        file.crcValid
+                          ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                          : 'bg-red-950 text-red-300 border-red-800'
+                      }`}>
+                        {file.crcValid ? '✓ 全文件 CRC 匹配' : '✗ CRC 不匹配'}
+                      </span>
+                    </div>
+
+                    {/* Preview Area */}
+                    {previewIdx === idx && file.textPreview && (
+                      <div className="p-2.5 bg-slate-900 rounded border border-slate-800 font-mono text-[11px] text-slate-300 max-h-36 overflow-y-auto whitespace-pre-wrap break-all">
+                        {file.textPreview}
+                      </div>
+                    )}
+
+                    {/* Actions: Download and Preview */}
+                    <div className="flex items-center gap-2 pt-1 border-t border-slate-900">
+                      {file.blobUrl && (
+                        <a
+                          href={file.blobUrl}
+                          download={file.name}
+                          className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold rounded text-xs transition cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>下载到手机本地</span>
+                        </a>
+                      )}
+
+                      {file.textPreview && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewIdx(previewIdx === idx ? null : idx)}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs border border-slate-700 transition cursor-pointer"
+                        >
+                          {previewIdx === idx ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          <span>{previewIdx === idx ? '收起预览' : '直接预览'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Real-time Decoded Message Log */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
@@ -517,6 +661,15 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                         帧序号 #{pkt.seq} · {new Date(pkt.timestamp).toLocaleTimeString()}
                       </span>
                       <div className="flex items-center gap-2">
+                        {pkt.packetType !== PacketType.TEXT && (
+                          <span className="text-cyan-300 bg-cyan-950/80 px-1.5 py-0.5 rounded border border-cyan-800/80">
+                            {pkt.packetType === PacketType.FILE_START
+                              ? 'FILE_START'
+                              : pkt.packetType === PacketType.FILE_DATA
+                              ? 'FILE_DATA'
+                              : 'FILE_END'}
+                          </span>
+                        )}
                         {pkt.fecCorrections > 0 && (
                           <span className="text-cyan-400 bg-cyan-950/80 px-1.5 py-0.5 rounded border border-cyan-800/80">
                             FEC已纠偏 {pkt.fecCorrections} 位
@@ -529,7 +682,9 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                     </div>
 
                     <div className="text-white text-xs bg-slate-900/80 p-2 rounded border border-slate-800/60 break-all select-all font-sans">
-                      {pkt.text || `[${pkt.payload.length} 字节二进制数据]`}
+                      {pkt.packetType === PacketType.FILE_DATA && pkt.fileMeta?.chunkIdx !== undefined
+                        ? `[文件分卷 #${pkt.fileMeta.chunkIdx + 1} / ${pkt.fileMeta.totalChunks} · ${pkt.fileMeta.chunkData?.length || 0} 字节]`
+                        : pkt.text || `[${pkt.payload.length} 字节二进制数据]`}
                     </div>
 
                     <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1.5">
@@ -546,11 +701,3 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     </div>
   );
 };
-
-function ShieldCheck(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...props} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-    </svg>
-  );
-}

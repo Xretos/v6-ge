@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>3.5mm 音频数据接收端 (FSK Receiver) - AudioJack Modem</title>
+  <title>3.5mm 音频数据/文件接收端 (FSK Receiver) - AudioJack Modem</title>
   <style>
     :root {
       --bg: #090d16;
@@ -34,7 +34,7 @@
       padding-bottom: 12px;
       border-bottom: 1px solid var(--card-border);
     }
-    h1 { font-size: 1.25rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+    h1 { font-size: 1.2rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
     .badge {
       display: inline-block;
       font-size: 0.7rem;
@@ -100,6 +100,7 @@
       padding: 6px 10px;
       border-radius: 6px;
       border: 1px solid var(--card-border);
+      cursor: pointer;
     }
     canvas {
       width: 100%;
@@ -170,6 +171,27 @@
       border-left: 3px solid var(--accent);
     }
     .msg-text.corrupted { border-left-color: var(--danger); color: #fca5a5; }
+    .file-card {
+      background: #0c1424;
+      border: 1px solid #1e3a5f;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .file-progress-bg {
+      width: 100%;
+      height: 8px;
+      background: #111d33;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 6px 0;
+    }
+    .file-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #06b6d4, #10b981);
+      width: 0%;
+      transition: width 0.15s ease;
+    }
     .nav-links {
       display: flex;
       justify-content: space-around;
@@ -183,8 +205,8 @@
   <div class="container">
     <header>
       <div>
-        <h1>📥 3.5mm 音频数据接收端</h1>
-        <p style="font-size: 0.8rem; color: var(--text-dim);">实时麦克风音频采集与 FSK 信号解调器</p>
+        <h1>📥 3.5mm 音频数据/文件接收端</h1>
+        <p style="font-size: 0.8rem; color: var(--text-dim);">实时麦克风音频采集、FSK 解调与多包文件重组</p>
       </div>
       <span class="badge" id="srBadge">Fs: 未初始化</span>
     </header>
@@ -225,6 +247,31 @@
       </p>
     </div>
 
+    <!-- 正在接收中的文件分卷进度卡片 -->
+    <div class="card" id="activeFileCard" style="display: none; border-color: #0284c7; background: #082f4940;">
+      <div class="card-title">
+        <span style="color: #38bdf8;">📦 正在接收并拼接文件</span>
+        <span id="activeFilePercent" style="font-family: monospace; color: #38bdf8; font-weight: 700;">0%</span>
+      </div>
+      <div style="font-size: 0.85rem; color: #fff; font-weight: 600;" id="activeFileName">file.bin</div>
+      <div class="file-progress-bg">
+        <div class="file-progress-fill" id="activeFileBar"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
+        <span id="activeFileChunks">0/0 分卷</span>
+        <span id="activeFileBytes">0 字节</span>
+      </div>
+    </div>
+
+    <!-- 已完整接收的文件列表 -->
+    <div class="card" id="receivedFilesCard" style="display: none;">
+      <div class="card-title">
+        <span style="color: #10b981;">💾 已成功接收重组的文件</span>
+        <button class="btn-secondary" onclick="clearReceivedFiles()">清空</button>
+      </div>
+      <div id="receivedFilesList"></div>
+    </div>
+
     <!-- 信号质量与可视化监测 -->
     <div class="card">
       <div class="card-title">
@@ -250,21 +297,21 @@
 
       <div class="stat-grid">
         <div class="stat-box">
-          <div class="stat-label">有效数据包</div>
-          <div class="stat-num" id="statValid" style="color: #10b981;">0</div>
+          <div class="stat-label">有效报文 (CRC正确)</div>
+          <div class="stat-num" id="statValid" style="color: var(--accent);">0</div>
         </div>
         <div class="stat-box">
-          <div class="stat-label">FEC 纠错数</div>
+          <div class="stat-label">FEC 纠错数 (Bits)</div>
           <div class="stat-num" id="statCorrected" style="color: #38bdf8;">0</div>
         </div>
         <div class="stat-box">
-          <div class="stat-label">CRC 丢包率</div>
-          <div class="stat-num" id="statLossRate" style="color: #f59e0b;">0.0%</div>
+          <div class="stat-label">丢包率 (CRC失真)</div>
+          <div class="stat-num" id="statLossRate" style="color: var(--danger);">0.0%</div>
         </div>
       </div>
     </div>
 
-    <!-- 接收数据列表 -->
+    <!-- 接收解码报文记录 -->
     <div class="card">
       <div class="card-title">
         <span>📜 接收报文记录 (实时解码)</span>
@@ -286,48 +333,53 @@
 
   <script>
     // ========================================================================
-    // 纯客户端 JavaScript FSK 解调与纠错引擎
+    // 纯客户端 JavaScript FSK 解调与文件重组引擎
     // ========================================================================
     let audioCtx = null;
     let micStream = null;
-    let isListening = false;
     let analyserNode = null;
     let scriptProcessor = null;
+    let isListening = false;
+    let animId = null;
 
     let validCount = 0;
     let errorCount = 0;
     let totalFecCorrections = 0;
 
-    // Hamming(7,4) 解码与单比特纠错
-    function hammingDecodeNibble(codeword) {
-      let bits = codeword & 0x7f;
-      const r1 = (bits >> 6) & 1, r2 = (bits >> 5) & 1, r3 = (bits >> 4) & 1,
-            r4 = (bits >> 3) & 1, r5 = (bits >> 2) & 1, r6 = (bits >> 1) & 1, r7 = bits & 1;
+    // File transfer reception state
+    let activeFileTransfer = null;
+    let receivedFiles = [];
 
-      const s1 = r1 ^ r3 ^ r5 ^ r7;
-      const s2 = r2 ^ r3 ^ r6 ^ r7;
-      const s3 = r4 ^ r5 ^ r6 ^ r7;
-      const syndrome = (s3 << 2) | (s2 << 1) | s1;
+    // Hamming(7,4) 解码表
+    const H_SYNDROME_MAP = [0, 6, 5, 3, 4, 1, 2, 0];
+    function hammingDecodeNibble(code) {
+      const p1 = (code >> 6) & 1, p2 = (code >> 5) & 1, d1 = (code >> 4) & 1;
+      const p3 = (code >> 3) & 1, d2 = (code >> 2) & 1, d3 = (code >> 1) & 1, d4 = code & 1;
+      const s1 = p1 ^ d1 ^ d2 ^ d4;
+      const s2 = p2 ^ d1 ^ d3 ^ d4;
+      const s3 = p3 ^ d2 ^ d3 ^ d4;
+      const syndrome = (s1 << 2) | (s2 << 1) | s3;
 
-      let corrected = false;
-      if (syndrome > 0 && syndrome <= 7) {
-        bits ^= (1 << (7 - syndrome));
-        corrected = true;
+      let corrected = code;
+      let correctionCount = 0;
+      if (syndrome !== 0) {
+        const errBit = H_SYNDROME_MAP[syndrome];
+        if (errBit > 0) {
+          corrected ^= (1 << (errBit - 1));
+          correctionCount = 1;
+        }
       }
-
-      const d1 = (bits >> 4) & 1, d2 = (bits >> 2) & 1, d3 = (bits >> 1) & 1, d4 = bits & 1;
-      return { nibble: (d1 << 3) | (d2 << 2) | (d3 << 1) | d4, corrected };
+      const cd1 = (corrected >> 4) & 1, cd2 = (corrected >> 2) & 1, cd3 = (corrected >> 1) & 1, cd4 = corrected & 1;
+      return { nibble: (cd1 << 3) | (cd2 << 2) | (cd3 << 1) | cd4, corrected: correctionCount };
     }
 
-    function hammingDecodeByte(hCode, lCode) {
-      const h = hammingDecodeNibble(hCode);
-      const l = hammingDecodeNibble(lCode);
-      return {
-        byte: (h.nibble << 4) | l.nibble,
-        corrections: (h.corrected ? 1 : 0) + (l.corrected ? 1 : 0)
-      };
+    function hammingDecodeByte(highCode, lowCode) {
+      const h = hammingDecodeNibble(highCode);
+      const l = hammingDecodeNibble(lowCode);
+      return { byte: ((h.nibble & 0x0f) << 4) | (l.nibble & 0x0f), corrections: h.corrected + l.corrected };
     }
 
+    // CRC-16-CCITT
     function computeCrc16(data) {
       let crc = 0xffff;
       for (let i = 0; i < data.length; i++) {
@@ -341,269 +393,87 @@
 
     const SYNC_BITS = [1,1,0,1,0,0,1,1,1,0,0,1,0,0,0,1]; // 0xD391
 
-    // 绘制示波器与频谱
-    const waveCanvas = document.getElementById('rxWaveCanvas');
-    const waveCtx = waveCanvas.getContext('2d');
-    const specCanvas = document.getElementById('rxSpecCanvas');
-    const specCtx = specCanvas.getContext('2d');
+    const PacketType = {
+      TEXT: 0,
+      FILE_START: 1,
+      FILE_DATA: 2,
+      FILE_END: 3
+    };
 
-    function resizeCanvases() {
-      waveCanvas.width = waveCanvas.clientWidth * window.devicePixelRatio;
-      waveCanvas.height = waveCanvas.clientHeight * window.devicePixelRatio;
-      specCanvas.width = specCanvas.clientWidth * window.devicePixelRatio;
-      specCanvas.height = specCanvas.clientHeight * window.devicePixelRatio;
-    }
-    window.addEventListener('resize', resizeCanvases);
-    resizeCanvases();
-
-    // 环形样本缓冲用于解调
-    const BUFFER_SIZE = 48000; // 1秒缓冲
-    const audioSampleBuffer = new Float32Array(BUFFER_SIZE);
-    let bufferWriteIdx = 0;
-    let totalSamplesPushed = 0;
-    let lastProcessedIdx = 0;
-
-    // 滑动比特缓冲
-    let streamBitBuffer = [];
-
-    // 启动/停止监听
-    const btnToggle = document.getElementById('btnToggleListen');
-    btnToggle.addEventListener('click', async () => {
-      if (isListening) {
-        stopListening();
-      } else {
-        await startListening();
-      }
-    });
-
-    async function startListening() {
-      try {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContextClass();
-        document.getElementById('srBadge').textContent = 'Fs: ' + audioCtx.sampleRate + ' Hz';
-
-        // 关键：针对音频调制解调，禁用降噪、回声抑制和自动增益，保留原始模拟波形
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            channelCount: 1,
-          }
-        });
-
-        const source = audioCtx.createMediaStreamSource(micStream);
-
-        analyserNode = audioCtx.createAnalyser();
-        analyserNode.fftSize = 1024;
-        analyserNode.smoothingTimeConstant = 0.4;
-        source.connect(analyserNode);
-
-        // 使用 ScriptProcessor 处理流式音频样本
-        scriptProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
-        source.connect(scriptProcessor);
-        // 连接到 destination 维持时钟，但将增益静音防止啸叫
-        const muteGain = audioCtx.createGain();
-        muteGain.gain.value = 0;
-        scriptProcessor.connect(muteGain);
-        muteGain.connect(audioCtx.destination);
-
-        activeDemodulator = new StreamingDemodulator(
-          audioCtx.sampleRate,
-          parseInt(document.getElementById('rxBaudRate').value),
-          1200,
-          2200
-        );
-
-        scriptProcessor.onaudioprocess = (e) => {
-          const inputData = e.inputBuffer.getChannelData(0);
-          if (activeDemodulator) {
-            activeDemodulator.pushSamples(inputData);
-          }
-        };
-
-        isListening = true;
-        btnToggle.textContent = '⏹ 停止监听耳机孔信号';
-        btnToggle.className = 'btn btn-stop';
-        document.getElementById('rxStatus').textContent = '正在监听中...';
-        document.getElementById('rxStatus').style.color = '#10b981';
-
-        requestAnimationFrame(renderLoop);
-      } catch (err) {
-        alert('无法启动音频输入: ' + (err.message || err));
-      }
-    }
-
-    function stopListening() {
-      isListening = false;
-      if (micStream) {
-        micStream.getTracks().forEach(t => t.stop());
-        micStream = null;
-      }
-      if (audioCtx) {
-        audioCtx.close();
-        audioCtx = null;
-      }
-      btnToggle.textContent = '▶ 启动耳机孔音频接收监听';
-      btnToggle.className = 'btn';
-      document.getElementById('rxStatus').textContent = '停止中';
-      document.getElementById('rxStatus').style.color = 'var(--text-dim)';
-    }
-
-    // 可视化渲染循环
-    const timeData = new Uint8Array(1024);
-    const freqData = new Uint8Array(512);
-
-    function renderLoop() {
-      if (!isListening) return;
-
-      if (analyserNode) {
-        analyserNode.getByteTimeDomainData(timeData);
-        analyserNode.getByteFrequencyData(freqData);
-
-        // 1. 绘制波形
-        waveCtx.fillStyle = '#070a12';
-        waveCtx.fillRect(0, 0, waveCanvas.width, waveCanvas.height);
-        waveCtx.strokeStyle = '#10b981';
-        waveCtx.lineWidth = 1.5;
-        waveCtx.beginPath();
-        for (let i = 0; i < timeData.length; i++) {
-          const x = (i / timeData.length) * waveCanvas.width;
-          const y = (timeData[i] / 255) * waveCanvas.height;
-          if (i === 0) waveCtx.moveTo(x, y);
-          else waveCtx.lineTo(x, y);
-        }
-        waveCtx.stroke();
-
-        // 2. 绘制频谱
-        specCtx.fillStyle = '#070a12';
-        specCtx.fillRect(0, 0, specCanvas.width, specCanvas.height);
-        const barWidth = (specCanvas.width / freqData.length) * 2;
-        let barX = 0;
-        for (let i = 0; i < freqData.length / 2; i++) {
-          const barHeight = (freqData[i] / 255) * specCanvas.height;
-          specCtx.fillStyle = (i > 15 && i < 35) ? '#06b6d4' : '#1e293b';
-          specCtx.fillRect(barX, specCanvas.height - barHeight, barWidth - 1, barHeight);
-          barX += barWidth;
-        }
-
-        // 3. 计算 RMS 电平
-        let sum = 0;
-        for (let i = 0; i < timeData.length; i++) {
-          const norm = (timeData[i] - 128) / 128;
-          sum += norm * norm;
-        }
-        const rms = Math.sqrt(sum / timeData.length);
-        const db = rms > 0.001 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
-        document.getElementById('rmsDbVal').textContent = db + ' dBFS';
-        document.getElementById('rmsFill').style.width = Math.min(100, rms * 250) + '%';
-      }
-
-      requestAnimationFrame(renderLoop);
-    }
-
-    // ========================================================================
-    // 连续流式 FSK 解调器 (带 DPLL 符号时钟恢复、自适应均衡与容错同步字)
-    // ========================================================================
+    // Streaming Demodulator with DPLL and AGC Equalizer
     class StreamingDemodulator {
-      constructor(sampleRate, baudRate, markFreq, spaceFreq) {
+      constructor(sampleRate, baudRate, markFreq = 1200, spaceFreq = 2200) {
         this.sampleRate = sampleRate;
         this.baudRate = baudRate;
         this.markFreq = markFreq;
         this.spaceFreq = spaceFreq;
-        this.N = Math.round(sampleRate / baudRate);
-        this.S = Math.max(1, Math.floor(this.N / 8)); // 8x 过采样步长
-
-        this.markCosTable = new Float32Array(this.N);
-        this.markSinTable = new Float32Array(this.N);
-        this.spaceCosTable = new Float32Array(this.N);
-        this.spaceSinTable = new Float32Array(this.N);
-        for (let n = 0; n < this.N; n++) {
-          const t = n / sampleRate;
-          this.markCosTable[n] = Math.cos(2 * Math.PI * markFreq * t);
-          this.markSinTable[n] = Math.sin(2 * Math.PI * markFreq * t);
-          this.spaceCosTable[n] = Math.cos(2 * Math.PI * spaceFreq * t);
-          this.spaceSinTable[n] = Math.sin(2 * Math.PI * spaceFreq * t);
-        }
+        this.samplesPerSymbol = Math.round(sampleRate / baudRate);
 
         this.sampleBuffer = [];
         this.bitBuffer = [];
+
         this.clockPhase = 0;
         this.lastDiscriminator = 0;
-        this.maxMarkEnergy = 0.001;
-        this.maxSpaceEnergy = 0.001;
+        this.markGain = 1.0;
+        this.spaceGain = 1.0;
+
+        this.subSampleStep = Math.max(1, Math.round(this.samplesPerSymbol / 8));
       }
 
-      reset() {
-        this.sampleBuffer = [];
-        this.bitBuffer = [];
-        this.clockPhase = 0;
-        this.lastDiscriminator = 0;
-      }
-
-      pushSamples(inputData) {
-        for (let i = 0; i < inputData.length; i++) {
-          this.sampleBuffer.push(inputData[i]);
+      pushAudio(samples) {
+        for (let i = 0; i < samples.length; i++) {
+          this.sampleBuffer.push(samples[i]);
         }
 
-        const N = this.N;
-        const S = this.S;
-
+        const N = this.samplesPerSymbol;
+        const S = this.subSampleStep;
         let snrSum = 0;
         let snrCount = 0;
 
-        while (this.sampleBuffer.length >= N + S) {
+        while (this.sampleBuffer.length >= N) {
           let markI = 0, markQ = 0;
           let spaceI = 0, spaceQ = 0;
-          let sumSq = 0;
+          const twoPiOverFs = (2 * Math.PI) / this.sampleRate;
 
           for (let n = 0; n < N; n++) {
             const s = this.sampleBuffer[n];
-            sumSq += s * s;
-            markI += s * this.markCosTable[n];
-            markQ += s * this.markSinTable[n];
-            spaceI += s * this.spaceCosTable[n];
-            spaceQ += s * this.spaceSinTable[n];
+            markI += s * Math.cos(twoPiOverFs * this.markFreq * n);
+            markQ += s * Math.sin(twoPiOverFs * this.markFreq * n);
+            spaceI += s * Math.cos(twoPiOverFs * this.spaceFreq * n);
+            spaceQ += s * Math.sin(twoPiOverFs * this.spaceFreq * n);
           }
 
-          const rms = Math.sqrt(sumSq / N);
-          const markE = (markI * markI + markQ * markQ) / (N * N);
-          const spaceE = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
+          const rawMarkEnergy = (markI * markI + markQ * markQ) / N;
+          const rawSpaceEnergy = (spaceI * spaceI + spaceQ * spaceQ) / N;
 
-          if (rms < 0.004 || (markE + spaceE) < 1e-7) {
-            this.maxMarkEnergy = Math.max(0.001, this.maxMarkEnergy * 0.99);
-            this.maxSpaceEnergy = Math.max(0.001, this.maxSpaceEnergy * 0.99);
-            this.sampleBuffer.splice(0, S);
-            this.clockPhase = 0;
-            continue;
+          if (rawMarkEnergy > 0.005) {
+            this.markGain = 0.98 * this.markGain + 0.02 * (1.0 / Math.sqrt(rawMarkEnergy));
+          }
+          if (rawSpaceEnergy > 0.005) {
+            this.spaceGain = 0.98 * this.spaceGain + 0.02 * (1.0 / Math.sqrt(rawSpaceEnergy));
           }
 
-          // 自适应均衡：手机麦克风对 2200Hz 衰减大于 1200Hz，自动补偿能量差异
-          this.maxMarkEnergy = Math.max(markE, this.maxMarkEnergy * 0.998);
-          this.maxSpaceEnergy = Math.max(spaceE, this.maxSpaceEnergy * 0.998);
+          const markEnergy = rawMarkEnergy * this.markGain;
+          const spaceEnergy = rawSpaceEnergy * this.spaceGain;
+          const discriminator = markEnergy - spaceEnergy;
 
-          const normMarkE = markE / Math.max(1e-6, this.maxMarkEnergy);
-          const normSpaceE = spaceE / Math.max(1e-6, this.maxSpaceEnergy);
-
-          const discriminator = normMarkE - normSpaceE;
-
-          const higherE = Math.max(normMarkE, normSpaceE);
-          const lowerE = Math.min(normMarkE, normSpaceE) + 1e-6;
-          snrSum += Math.min(45, Math.max(0, 10 * Math.log10(higherE / lowerE)));
+          const signalE = Math.max(markEnergy, spaceEnergy);
+          const noiseE = Math.min(markEnergy, spaceEnergy) + 1e-6;
+          snrSum += 10 * Math.log10(signalE / noiseE);
           snrCount++;
 
-          // DPLL 锁相环：检测符号跳变过零点
-          if (this.lastDiscriminator * discriminator < 0) {
-            let phaseError = this.clockPhase;
-            if (phaseError > N / 2) phaseError -= N;
-            this.clockPhase -= Math.round(phaseError * 0.35);
+          // DPLL Zero-Crossing Clock Tracking
+          if ((this.lastDiscriminator < 0 && discriminator >= 0) || (this.lastDiscriminator >= 0 && discriminator < 0)) {
+            const phaseError = this.clockPhase < N / 2 ? this.clockPhase : this.clockPhase - N;
+            this.clockPhase -= phaseError * 0.25;
+            if (this.clockPhase < 0) this.clockPhase += N;
+            if (this.clockPhase >= N) this.clockPhase -= N;
           }
           this.lastDiscriminator = discriminator;
 
           const prevClock = this.clockPhase;
           this.clockPhase += S;
 
-          // 在符号中心点（眼图张开度最大位置）采样比特
           if (prevClock < N / 2 && this.clockPhase >= N / 2) {
             this.bitBuffer.push(discriminator >= 0 ? 1 : 0);
             if (this.bitBuffer.length > 2500) {
@@ -660,6 +530,7 @@
 
           const [seq, payloadLen, flags] = headerBytes;
           const useFEC = (flags & 0x01) === 0x01;
+          const packetType = (flags >> 1) & 0x07;
 
           if (payloadLen > 128) {
             i++;
@@ -711,22 +582,15 @@
 
           const isValid = (receivedCrc === expectedCrc);
 
-          let decodedText = '';
-          try {
-            decodedText = new TextDecoder('utf-8').decode(payload);
-          } catch(e) {
-            decodedText = '[非UTF-8二进制数据]';
-          }
-
           if (isValid) {
             validCount++;
+            handleValidPacket(seq, packetType, payload, fecCorrections);
           } else {
             errorCount++;
+            appendMessage(seq, '[CRC 校验失败]', isValid, fecCorrections, packetType);
           }
           totalFecCorrections += fecCorrections;
-
           updateStats();
-          appendMessage(seq, decodedText, isValid, fecCorrections);
 
           i = cursor;
         }
@@ -737,13 +601,333 @@
       }
     }
 
+    // Packet and File Assembly Handling
+    function handleValidPacket(seq, packetType, payload, fecCorrections) {
+      if (packetType === PacketType.TEXT) {
+        let text = '';
+        try { text = new TextDecoder('utf-8').decode(payload); } catch(e) { text = '[二进制数据]'; }
+        appendMessage(seq, text, true, fecCorrections, packetType);
+        return;
+      }
+
+      if (packetType === PacketType.FILE_START) {
+        try {
+          const meta = JSON.parse(new TextDecoder('utf-8').decode(payload));
+          activeFileTransfer = {
+            name: meta.name,
+            size: meta.size,
+            totalChunks: meta.chunks,
+            mime: meta.mime || 'application/octet-stream',
+            chunks: new Map()
+          };
+          updateActiveFileUI();
+          appendMessage(seq, `[启动文件接收: ${meta.name} (${meta.size} 字节, ${meta.chunks} 分卷)]`, true, fecCorrections, packetType);
+        } catch(e) {}
+      } else if (packetType === PacketType.FILE_DATA) {
+        if (!activeFileTransfer) {
+          // If missed start frame, create fallback
+          const chunkIdx = (payload[0] << 8) | payload[1];
+          const totalChunks = (payload[2] << 8) | payload[3];
+          activeFileTransfer = {
+            name: 'received_file_' + Date.now() + '.bin',
+            size: 0,
+            totalChunks,
+            mime: 'application/octet-stream',
+            chunks: new Map()
+          };
+        }
+        const chunkIdx = (payload[0] << 8) | payload[1];
+        const totalChunks = (payload[2] << 8) | payload[3];
+        const slice = payload.subarray(4);
+        activeFileTransfer.chunks.set(chunkIdx, slice);
+        updateActiveFileUI();
+        appendMessage(seq, `[分卷 #${chunkIdx + 1}/${totalChunks} · ${slice.length} 字节]`, true, fecCorrections, packetType);
+      } else if (packetType === PacketType.FILE_END) {
+        let endMeta = null;
+        try { endMeta = JSON.parse(new TextDecoder('utf-8').decode(payload)); } catch(e) {}
+        appendMessage(seq, `[文件传输结束: ${endMeta ? endMeta.name : '完成'}]`, true, fecCorrections, packetType);
+
+        if (activeFileTransfer) {
+          assembleFile(endMeta);
+        }
+      }
+    }
+
+    function updateActiveFileUI() {
+      if (!activeFileTransfer) {
+        document.getElementById('activeFileCard').style.display = 'none';
+        return;
+      }
+      document.getElementById('activeFileCard').style.display = 'block';
+      document.getElementById('activeFileName').textContent = activeFileTransfer.name;
+
+      const received = activeFileTransfer.chunks.size;
+      const total = activeFileTransfer.totalChunks;
+      const percent = Math.min(100, Math.round((received / total) * 100));
+
+      document.getElementById('activeFileBar').style.width = percent + '%';
+      document.getElementById('activeFilePercent').textContent = percent + '%';
+      document.getElementById('activeFileChunks').textContent = received + ' / ' + total + ' 分卷';
+
+      let totalBytes = 0;
+      for (const slice of activeFileTransfer.chunks.values()) {
+        totalBytes += slice.length;
+      }
+      document.getElementById('activeFileBytes').textContent = totalBytes + ' 字节已就绪';
+    }
+
+    function assembleFile(endMeta) {
+      if (!activeFileTransfer) return;
+      const total = activeFileTransfer.totalChunks;
+      let totalLen = 0;
+      for (let c = 0; c < total; c++) {
+        const slice = activeFileTransfer.chunks.get(c);
+        if (slice) totalLen += slice.length;
+      }
+
+      const fullBytes = new Uint8Array(totalLen);
+      let offset = 0;
+      for (let c = 0; c < total; c++) {
+        const slice = activeFileTransfer.chunks.get(c);
+        if (slice) {
+          fullBytes.set(slice, offset);
+          offset += slice.length;
+        }
+      }
+
+      const calcCrc = computeCrc16(fullBytes);
+      const isCrcMatch = endMeta ? (endMeta.crc === calcCrc) : true;
+
+      let textPreview = '';
+      try {
+        textPreview = new TextDecoder('utf-8').decode(fullBytes);
+        if (textPreview.length > 500) textPreview = textPreview.substring(0, 500) + '... (截断)';
+      } catch(e) {
+        textPreview = '[二进制文件不可预览]';
+      }
+
+      const blob = new Blob([fullBytes], { type: activeFileTransfer.mime });
+      const blobUrl = URL.createObjectURL(blob);
+
+      receivedFiles.unshift({
+        name: activeFileTransfer.name,
+        size: fullBytes.length,
+        crcValid: isCrcMatch,
+        blobUrl,
+        textPreview,
+        time: new Date().toLocaleTimeString()
+      });
+
+      activeFileTransfer = null;
+      updateActiveFileUI();
+      renderReceivedFiles();
+    }
+
+    function renderReceivedFiles() {
+      const card = document.getElementById('receivedFilesCard');
+      const list = document.getElementById('receivedFilesList');
+      if (receivedFiles.length === 0) {
+        card.style.display = 'none';
+        return;
+      }
+      card.style.display = 'block';
+      list.innerHTML = '';
+
+      receivedFiles.forEach((file, idx) => {
+        const div = document.createElement('div');
+        div.className = 'file-card';
+        div.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600; color:#fff; font-size:0.9rem;">📄 ${escapeHtml(file.name)}</div>
+              <div style="font-size:0.75rem; color:var(--text-dim);">${file.size} 字节 · ${file.time}</div>
+            </div>
+            <span style="font-size:0.75rem; color:${file.crcValid ? '#10b981' : '#ef4444'}; font-weight:600;">
+              ${file.crcValid ? '✓ CRC匹配' : '✗ CRC异常'}
+            </span>
+          </div>
+          <div style="margin-top:8px; display:flex; gap:8px;">
+            <a href="${file.blobUrl}" download="${escapeHtml(file.name)}" class="btn" style="padding:6px 12px; font-size:0.8rem; text-decoration:none; width:auto; flex:1;">
+              📥 立即下载
+            </a>
+            <button class="btn-secondary" onclick="togglePreview(${idx})">预览</button>
+          </div>
+          <div id="preview_${idx}" style="display:none; margin-top:8px; background:#070a12; padding:8px; border-radius:4px; font-size:0.75rem; font-family:monospace; color:#cbd5e1; white-space:pre-wrap; max-height:120px; overflow-y:auto;">
+            ${escapeHtml(file.textPreview)}
+          </div>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    function togglePreview(idx) {
+      const el = document.getElementById('preview_' + idx);
+      if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function clearReceivedFiles() {
+      receivedFiles = [];
+      renderReceivedFiles();
+    }
+
+    // Audio Visualizer and Microphone Capture
+    const waveCanvas = document.getElementById('rxWaveCanvas');
+    const specCanvas = document.getElementById('rxSpecCanvas');
+    const waveCtx = waveCanvas.getContext('2d');
+    const specCtx = specCanvas.getContext('2d');
+
+    function resizeCanvases() {
+      waveCanvas.width = waveCanvas.clientWidth * window.devicePixelRatio;
+      waveCanvas.height = waveCanvas.clientHeight * window.devicePixelRatio;
+      specCanvas.width = specCanvas.clientWidth * window.devicePixelRatio;
+      specCanvas.height = specCanvas.clientHeight * window.devicePixelRatio;
+    }
+    window.addEventListener('resize', resizeCanvases);
+    resizeCanvases();
+
     let activeDemodulator = null;
 
-    document.getElementById('rxBaudRate').addEventListener('change', () => {
-      if (audioCtx && isListening) {
-        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, parseInt(document.getElementById('rxBaudRate').value), 1200, 2200);
+    document.getElementById('btnToggleListen').addEventListener('click', async () => {
+      if (isListening) {
+        stopListening();
+      } else {
+        await startListening();
       }
     });
+
+    async function startListening() {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioCtx();
+        document.getElementById('srBadge').textContent = 'Fs: ' + audioCtx.sampleRate + ' Hz';
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1
+          }
+        });
+        micStream = stream;
+
+        const source = audioCtx.createMediaStreamSource(stream);
+
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 1024;
+        source.connect(analyserNode);
+
+        scriptProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
+        source.connect(scriptProcessor);
+
+        const muteGain = audioCtx.createGain();
+        muteGain.gain.value = 0;
+        scriptProcessor.connect(muteGain);
+        muteGain.connect(audioCtx.destination);
+
+        const baudRate = parseInt(document.getElementById('rxBaudRate').value);
+        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, baudRate, 1200, 2200);
+
+        scriptProcessor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          if (activeDemodulator) {
+            activeDemodulator.pushAudio(inputData);
+          }
+        };
+
+        isListening = true;
+        document.getElementById('rxStatus').textContent = '● 正在监听耳机孔音频';
+        document.getElementById('rxStatus').style.color = 'var(--accent)';
+        document.getElementById('btnToggleListen').innerHTML = '<span>⏹ 停止接收监听</span>';
+        document.getElementById('btnToggleListen').classList.add('btn-stop');
+
+        startVisualizerLoop();
+      } catch(err) {
+        alert('无法启动音频输入: ' + err.message);
+      }
+    }
+
+    function stopListening() {
+      isListening = false;
+      if (animId) cancelAnimationFrame(animId);
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+      }
+      if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+      }
+      document.getElementById('rxStatus').textContent = '停止中';
+      document.getElementById('rxStatus').style.color = 'var(--text-dim)';
+      document.getElementById('btnToggleListen').innerHTML = '<span>▶ 启动耳机孔音频接收监听</span>';
+      document.getElementById('btnToggleListen').classList.remove('btn-stop');
+    }
+
+    function startVisualizerLoop() {
+      const timeData = new Uint8Array(analyserNode.fftSize);
+      const freqData = new Uint8Array(analyserNode.frequencyBinCount);
+
+      const render = () => {
+        if (!isListening) return;
+        analyserNode.getByteTimeDomainData(timeData);
+        analyserNode.getByteFrequencyData(freqData);
+
+        // 1. Waveform
+        const wW = waveCanvas.width;
+        const wH = waveCanvas.height;
+        waveCtx.fillStyle = '#070a12';
+        waveCtx.fillRect(0, 0, wW, wH);
+        waveCtx.strokeStyle = '#1e293b';
+        waveCtx.lineWidth = 1;
+        waveCtx.beginPath();
+        waveCtx.moveTo(0, wH / 2);
+        waveCtx.lineTo(wW, wH / 2);
+        waveCtx.stroke();
+
+        waveCtx.strokeStyle = '#10b981';
+        waveCtx.lineWidth = 1.8;
+        waveCtx.beginPath();
+        for (let i = 0; i < timeData.length; i++) {
+          const x = (i / timeData.length) * wW;
+          const y = (timeData[i] / 255) * wH;
+          if (i === 0) waveCtx.moveTo(x, y);
+          else waveCtx.lineTo(x, y);
+        }
+        waveCtx.stroke();
+
+        // 2. Spectrum
+        const sW = specCanvas.width;
+        const sH = specCanvas.height;
+        specCtx.fillStyle = '#070a12';
+        specCtx.fillRect(0, 0, sW, sH);
+
+        const barWidth = (sW / (freqData.length / 2)) * 1.5;
+        let barX = 0;
+        for (let i = 0; i < freqData.length / 2; i++) {
+          const barHeight = (freqData[i] / 255) * sH;
+          const isMarkSpace = (i >= 20 && i <= 30) || (i >= 42 && i <= 54);
+          specCtx.fillStyle = isMarkSpace ? '#06b6d4' : '#1e293b';
+          specCtx.fillRect(barX, sH - barHeight, barWidth - 1, barHeight);
+          barX += barWidth;
+        }
+
+        // RMS Meter
+        let sum = 0;
+        for (let i = 0; i < timeData.length; i++) {
+          const v = (timeData[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / timeData.length);
+        const db = rms > 0.0001 ? Math.max(-96, Math.round(20 * Math.log10(rms))) : -96;
+        document.getElementById('rmsDbVal').textContent = db + ' dBFS';
+        const fillPercent = Math.min(100, Math.max(0, (db + 60) * 1.67));
+        document.getElementById('rmsFill').style.width = fillPercent + '%';
+
+        animId = requestAnimationFrame(render);
+      };
+      render();
+    }
 
     function updateStats() {
       document.getElementById('statValid').textContent = validCount;
@@ -753,22 +937,24 @@
       document.getElementById('statLossRate').textContent = rate + '%';
     }
 
-    function appendMessage(seq, text, isValid, fecCorrections) {
+    function appendMessage(seq, text, isValid, fecCorrections, packetType = 0) {
       const msgList = document.getElementById('msgList');
       if (validCount + errorCount === 1) {
-        msgList.innerHTML = ''; // 清除初始提示
+        msgList.innerHTML = '';
       }
 
       const item = document.createElement('div');
       item.className = 'msg-item';
 
+      const typeLabel = packetType === 1 ? 'FILE_START' : packetType === 2 ? 'FILE_DATA' : packetType === 3 ? 'FILE_END' : 'TEXT';
+
       const timeStr = new Date().toLocaleTimeString();
       item.innerHTML = `
         <div class="msg-meta">
-          <span>包序号 #${seq} [${timeStr}]</span>
+          <span>[${typeLabel}] 帧 #${seq} (${timeStr})</span>
           <span>
-            ${isValid ? '<b style="color:#10b981;">✓ CRC 校验通过</b>' : '<b style="color:#ef4444;">✗ CRC 校验失败 (丢包)</b>'}
-            ${fecCorrections > 0 ? ` · <span style="color:#38bdf8;">FEC修复 ${fecCorrections} 位错误</span>` : ''}
+            ${isValid ? '<b style="color:#10b981;">✓ CRC正确</b>' : '<b style="color:#ef4444;">✗ CRC丢包</b>'}
+            ${fecCorrections > 0 ? ` · <span style="color:#38bdf8;">FEC纠错${fecCorrections}位</span>` : ''}
           </span>
         </div>
         <div class="msg-text ${isValid ? '' : 'corrupted'}">${escapeHtml(text)}</div>
@@ -777,7 +963,7 @@
     }
 
     function escapeHtml(str) {
-      return str.replace(/[&<>'"]/g, tag => ({
+      return String(str).replace(/[&<>'"]/g, tag => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
       }[tag] || tag));
     }

@@ -139,10 +139,30 @@ export const DEFAULT_CONFIG: ModemConfig = {
   useFEC: true,
 };
 
+export enum PacketType {
+  TEXT = 0,
+  FILE_START = 1,
+  FILE_DATA = 2,
+  FILE_END = 3,
+}
+
+export interface FileMeta {
+  name: string;
+  size: number;
+  chunks: number;
+  mime?: string;
+  chunkIdx?: number;
+  totalChunks?: number;
+  chunkData?: Uint8Array;
+  crc?: number;
+}
+
 export interface DecodedPacket {
   seq: number;
   payload: Uint8Array;
   text?: string;
+  packetType: PacketType;
+  fileMeta?: FileMeta;
   crcValid: boolean;
   crcExpected: number;
   crcReceived: number;
@@ -152,13 +172,18 @@ export interface DecodedPacket {
 }
 
 // ============================================================================
-// 4. FRAME ENCODER
+// 4. FRAME ENCODER & FILE CHUNKER
 // ============================================================================
 export class FrameEncoder {
   /**
    * Builds the complete bitstream for a payload (Preamble + Sync + Header + Payload + CRC)
    */
-  static encodePacketToBits(payload: Uint8Array, seq: number, useFEC: boolean): number[] {
+  static encodePacketToBits(
+    payload: Uint8Array,
+    seq: number,
+    useFEC: boolean,
+    packetType: PacketType = PacketType.TEXT
+  ): number[] {
     const bits: number[] = [];
 
     // 1. Preamble (allows receiver AGC & symbol clock to synchronize)
@@ -172,7 +197,8 @@ export class FrameEncoder {
     }
 
     // 3. Header: [seq (1 byte), len (1 byte), flags (1 byte)]
-    const flags = (useFEC ? 0x01 : 0x00);
+    // Flags: bit 0: useFEC, bits 1..3: packetType
+    const flags = (useFEC ? 0x01 : 0x00) | ((packetType & 0x07) << 1);
     const headerBytes = new Uint8Array([seq & 0xff, payload.length & 0xff, flags]);
 
     // 4. Checksum data: header + payload
@@ -217,6 +243,263 @@ export class FrameEncoder {
     bits.push(1, 1, 1, 1, 1, 1, 1, 1);
 
     return bits;
+  }
+}
+
+// ============================================================================
+// 4.1. FILE CHUNKER & PACKETIZER
+// ============================================================================
+export class FileChunker {
+  /**
+   * Splits a file into an array of packets: 1 FILE_START, N FILE_DATA, and 1 FILE_END
+   */
+  static createFilePackets(
+    filename: string,
+    fileBytes: Uint8Array,
+    mimeType: string = 'application/octet-stream',
+    chunkSize: number = 48,
+    useFEC: boolean = true,
+    startSeq: number = 1
+  ): { seq: number; packetType: PacketType; bits: number[]; description: string; payload: Uint8Array }[] {
+    const totalChunks = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
+    const packets = [];
+    let curSeq = startSeq;
+
+    // 1. FILE_START packet
+    const meta = JSON.stringify({
+      name: filename,
+      size: fileBytes.length,
+      chunks: totalChunks,
+      mime: mimeType,
+    });
+    const metaPayload = new TextEncoder().encode(meta);
+    const startBits = FrameEncoder.encodePacketToBits(metaPayload, curSeq & 0xff, useFEC, PacketType.FILE_START);
+    packets.push({
+      seq: curSeq & 0xff,
+      packetType: PacketType.FILE_START,
+      bits: startBits,
+      description: `文件传输启动: ${filename} (${fileBytes.length} 字节, ${totalChunks} 分卷)`,
+      payload: metaPayload,
+    });
+    curSeq++;
+
+    // 2. FILE_DATA packets
+    for (let c = 0; c < totalChunks; c++) {
+      const slice = fileBytes.subarray(c * chunkSize, Math.min(fileBytes.length, (c + 1) * chunkSize));
+      const chunkPayload = new Uint8Array(4 + slice.length);
+      chunkPayload[0] = (c >> 8) & 0xff;
+      chunkPayload[1] = c & 0xff;
+      chunkPayload[2] = (totalChunks >> 8) & 0xff;
+      chunkPayload[3] = totalChunks & 0xff;
+      chunkPayload.set(slice, 4);
+
+      const dataBits = FrameEncoder.encodePacketToBits(chunkPayload, curSeq & 0xff, useFEC, PacketType.FILE_DATA);
+      packets.push({
+        seq: curSeq & 0xff,
+        packetType: PacketType.FILE_DATA,
+        bits: dataBits,
+        description: `分卷 [${c + 1}/${totalChunks}] (${slice.length} 字节)`,
+        payload: chunkPayload,
+      });
+      curSeq++;
+    }
+
+    // 3. FILE_END packet
+    const endMeta = JSON.stringify({
+      name: filename,
+      size: fileBytes.length,
+      crc: CRC16.compute(fileBytes),
+    });
+    const endPayload = new TextEncoder().encode(endMeta);
+    const endBits = FrameEncoder.encodePacketToBits(endPayload, curSeq & 0xff, useFEC, PacketType.FILE_END);
+    packets.push({
+      seq: curSeq & 0xff,
+      packetType: PacketType.FILE_END,
+      bits: endBits,
+      description: `文件传输结束标记: ${filename}`,
+      payload: endPayload,
+    });
+
+    return packets;
+  }
+}
+
+// ============================================================================
+// 4.2. FILE ASSEMBLER (RECEIVER ACCUMULATOR)
+// ============================================================================
+export interface AssembledFile {
+  name: string;
+  size: number;
+  data: Uint8Array;
+  mime: string;
+  crcValid: boolean;
+  receivedChunks: number;
+  totalChunks: number;
+  timestamp: number;
+  blobUrl?: string;
+  textPreview?: string;
+}
+
+export interface FileProgress {
+  name: string;
+  receivedChunks: number;
+  totalChunks: number;
+  receivedBytes: number;
+  totalBytes: number;
+  percent: number;
+  status: 'receiving' | 'completed' | 'corrupted';
+}
+
+export class FileAssembler {
+  private activeTransfer: {
+    name: string;
+    size: number;
+    totalChunks: number;
+    mime: string;
+    chunks: Map<number, Uint8Array>;
+    expectedCrc?: number;
+    startTime: number;
+  } | null = null;
+
+  public onProgress?: (progress: FileProgress) => void;
+  public onComplete?: (file: AssembledFile) => void;
+
+  public processPacket(packet: DecodedPacket): AssembledFile | null {
+    if (!packet.crcValid) return null;
+
+    if (packet.packetType === PacketType.FILE_START && packet.fileMeta) {
+      this.activeTransfer = {
+        name: packet.fileMeta.name,
+        size: packet.fileMeta.size,
+        totalChunks: packet.fileMeta.chunks,
+        mime: packet.fileMeta.mime || 'application/octet-stream',
+        chunks: new Map(),
+        startTime: Date.now(),
+      };
+
+      if (this.onProgress) {
+        this.onProgress({
+          name: this.activeTransfer.name,
+          receivedChunks: 0,
+          totalChunks: this.activeTransfer.totalChunks,
+          receivedBytes: 0,
+          totalBytes: this.activeTransfer.size,
+          percent: 0,
+          status: 'receiving',
+        });
+      }
+      return null;
+    }
+
+    if (packet.packetType === PacketType.FILE_DATA && packet.fileMeta && packet.fileMeta.chunkData) {
+      if (!this.activeTransfer) {
+        this.activeTransfer = {
+          name: `received_${Date.now()}.bin`,
+          size: 0,
+          totalChunks: packet.fileMeta.totalChunks || 1,
+          mime: 'application/octet-stream',
+          chunks: new Map(),
+          startTime: Date.now(),
+        };
+      }
+
+      const chunkIdx = packet.fileMeta.chunkIdx ?? 0;
+      this.activeTransfer.chunks.set(chunkIdx, packet.fileMeta.chunkData);
+
+      let bytesReceived = 0;
+      for (const data of this.activeTransfer.chunks.values()) {
+        bytesReceived += data.length;
+      }
+
+      const totalChunks = this.activeTransfer.totalChunks;
+      const receivedChunks = this.activeTransfer.chunks.size;
+      const percent = Math.min(100, Math.round((receivedChunks / totalChunks) * 100));
+
+      if (this.onProgress) {
+        this.onProgress({
+          name: this.activeTransfer.name,
+          receivedChunks,
+          totalChunks,
+          receivedBytes: bytesReceived,
+          totalBytes: this.activeTransfer.size || bytesReceived,
+          percent,
+          status: receivedChunks >= totalChunks ? 'completed' : 'receiving',
+        });
+      }
+
+      if (receivedChunks >= totalChunks) {
+        return this.finalizeFile();
+      }
+      return null;
+    }
+
+    if (packet.packetType === PacketType.FILE_END && this.activeTransfer) {
+      if (packet.fileMeta && packet.fileMeta.crc !== undefined) {
+        this.activeTransfer.expectedCrc = packet.fileMeta.crc;
+      }
+      return this.finalizeFile();
+    }
+
+    return null;
+  }
+
+  private finalizeFile(): AssembledFile | null {
+    if (!this.activeTransfer) return null;
+
+    const { name, size, totalChunks, mime, chunks } = this.activeTransfer;
+    let totalLen = 0;
+    for (let c = 0; c < totalChunks; c++) {
+      const chunk = chunks.get(c);
+      if (chunk) totalLen += chunk.length;
+    }
+
+    const fullData = new Uint8Array(totalLen);
+    let offset = 0;
+    for (let c = 0; c < totalChunks; c++) {
+      const chunk = chunks.get(c);
+      if (chunk) {
+        fullData.set(chunk, offset);
+        offset += chunk.length;
+      }
+    }
+
+    const actualCrc = CRC16.compute(fullData);
+    const crcValid = this.activeTransfer.expectedCrc !== undefined ? this.activeTransfer.expectedCrc === actualCrc : true;
+
+    let blobUrl: string | undefined;
+    try {
+      if (typeof Blob !== 'undefined' && typeof URL !== 'undefined') {
+        const blob = new Blob([fullData], { type: mime });
+        blobUrl = URL.createObjectURL(blob);
+      }
+    } catch {}
+
+    let textPreview: string | undefined;
+    try {
+      if (mime.includes('text') || mime.includes('json') || mime.includes('csv') || mime.includes('xml')) {
+        textPreview = new TextDecoder('utf-8').decode(fullData.subarray(0, 500));
+      }
+    } catch {}
+
+    const assembled: AssembledFile = {
+      name,
+      size: fullData.length,
+      data: fullData,
+      mime,
+      crcValid,
+      receivedChunks: chunks.size,
+      totalChunks,
+      timestamp: Date.now(),
+      blobUrl,
+      textPreview,
+    };
+
+    if (this.onComplete) {
+      this.onComplete(assembled);
+    }
+
+    this.activeTransfer = null;
+    return assembled;
   }
 }
 
@@ -590,17 +873,67 @@ export class FSKDemodulator {
 
       const crcValid = (receivedCrc === expectedCrc);
 
+      const packetType: PacketType = (flags >> 1) & 0x07;
       let text: string | undefined;
-      try {
-        text = new TextDecoder('utf-8', { fatal: false }).decode(payload);
-      } catch {
-        text = undefined;
+      let fileMeta: FileMeta | undefined;
+
+      if (packetType === PacketType.FILE_START) {
+        try {
+          const str = new TextDecoder('utf-8').decode(payload);
+          const parsed = JSON.parse(str);
+          fileMeta = {
+            name: parsed.name,
+            size: parsed.size,
+            chunks: parsed.chunks,
+            mime: parsed.mime || 'application/octet-stream',
+          };
+          text = `[文件传输开始] ${parsed.name} (${parsed.size} 字节, ${parsed.chunks} 分卷)`;
+        } catch {
+          text = '[文件传输开始] (元数据解析失败)';
+        }
+      } else if (packetType === PacketType.FILE_DATA) {
+        if (payload.length >= 4) {
+          const chunkIdx = (payload[0] << 8) | payload[1];
+          const totalChunks = (payload[2] << 8) | payload[3];
+          const chunkData = payload.subarray(4);
+          fileMeta = {
+            name: '',
+            size: 0,
+            chunks: totalChunks,
+            chunkIdx,
+            totalChunks,
+            chunkData,
+          };
+          text = `[文件分卷 #${chunkIdx + 1}/${totalChunks}] ${chunkData.length} 字节`;
+        }
+      } else if (packetType === PacketType.FILE_END) {
+        try {
+          const str = new TextDecoder('utf-8').decode(payload);
+          const parsed = JSON.parse(str);
+          fileMeta = {
+            name: parsed.name,
+            size: parsed.size,
+            chunks: 0,
+            crc: parsed.crc,
+          };
+          text = `[文件传输结束] ${parsed.name}`;
+        } catch {
+          text = '[文件传输结束]';
+        }
+      } else {
+        try {
+          text = new TextDecoder('utf-8', { fatal: false }).decode(payload);
+        } catch {
+          text = undefined;
+        }
       }
 
       packets.push({
         seq,
         payload,
         text,
+        packetType,
+        fileMeta,
         crcValid,
         crcExpected: expectedCrc,
         crcReceived: receivedCrc,

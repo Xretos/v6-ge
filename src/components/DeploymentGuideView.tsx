@@ -54,7 +54,7 @@ export const DeploymentGuideView: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              包含完整的 Web Audio CPFSK 调制器、Hamming(7,4) 编码器、CRC-16 校验码生成器及发送端时域示波器。
+              包含完整的 Web Audio CPFSK 调制器、Hamming(7,4) 编码器、CRC-16 校验码生成器、多包文件分卷切片引擎及示波器。
             </p>
             <div className="flex items-center gap-2 pt-1">
               <a
@@ -86,7 +86,7 @@ export const DeploymentGuideView: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              包含麦克风原生音频采集、时域波形示波器、频域 FFT 能量分布、正交匹配滤波解调器及 Hamming(7,4) 纠错引擎。
+              包含麦克风原生音频采集、时域波形示波器、频域 FFT 能量分布、正交匹配滤波解调器、Hamming(7,4) 纠错引擎及多包文件自动重组与下载器。
             </p>
             <div className="flex items-center gap-2 pt-1">
               <a

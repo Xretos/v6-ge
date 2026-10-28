@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>3.5mm 音频数据发送端 (FSK Transmitter) - AudioJack Modem</title>
+  <title>3.5mm 音频数据/文件发送端 (FSK Transmitter) - AudioJack Modem</title>
   <style>
     :root {
       --bg: #090d16;
@@ -34,7 +34,7 @@
       padding-bottom: 12px;
       border-bottom: 1px solid var(--card-border);
     }
-    h1 { font-size: 1.25rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+    h1 { font-size: 1.2rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
     .badge {
       display: inline-block;
       font-size: 0.7rem;
@@ -77,7 +77,6 @@
       border-color: var(--accent);
     }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; }
     .btn {
       width: 100%;
       background: var(--accent);
@@ -100,11 +99,76 @@
       background: #1f2937;
       color: #e5e7eb;
       font-weight: 500;
-      font-size: 0.85rem;
-      padding: 8px 12px;
+      font-size: 0.8rem;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
     }
-    .btn-secondary:hover { background: #374151; color: #fff; }
-    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger {
+      background: #7f1d1d;
+      color: #fca5a5;
+      border: 1px solid #991b1b;
+    }
+    .tab-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 8px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-dim);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: rgba(6, 182, 212, 0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .drop-zone {
+      border: 2px dashed #2d3748;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      background: #090e18;
+      cursor: pointer;
+      margin-bottom: 12px;
+      transition: border-color 0.2s;
+    }
+    .drop-zone:hover {
+      border-color: var(--accent);
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #1a2234;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      transition: width 0.15s ease;
+    }
+    .quick-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+    .tag {
+      background: #1e293b;
+      color: #94a3b8;
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tag:hover { background: #334155; color: #fff; }
     canvas {
       width: 100%;
       height: 120px;
@@ -113,43 +177,24 @@
       border: 1px solid #1a2234;
       display: block;
     }
-    .stat-row {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.8rem;
-      color: var(--text-dim);
-      padding: 4px 0;
-      border-bottom: 1px dashed #1e293b;
-    }
-    .stat-val { font-family: monospace; color: #38bdf8; font-weight: 600; }
-    .quick-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
-    .tag {
-      background: #1e293b;
-      color: #cbd5e1;
-      font-size: 0.75rem;
-      padding: 4px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .tag:hover { background: #334155; color: #fff; }
+    .stat-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 6px; color: var(--text-dim); }
+    .stat-val { color: #38bdf8; font-family: monospace; font-weight: 600; }
     .nav-links {
       display: flex;
-      justify-content: space-around;
+      justify-content: space-between;
       margin-top: 16px;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
     }
     .nav-links a { color: var(--accent); text-decoration: none; }
     .nav-links a:hover { text-decoration: underline; }
-    .slider-container { display: flex; align-items: center; gap: 10px; }
-    .slider-container input[type="range"] { flex: 1; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <div>
-        <h1>📡 3.5mm 音频数据发送端</h1>
-        <p style="font-size: 0.8rem; color: var(--text-dim);">FSK 模拟音频耳机孔调制发送器</p>
+        <h1>📡 3.5mm 音频数据/文件发送端</h1>
+        <p style="font-size: 0.8rem; color: var(--text-dim);">FSK 模拟音频耳机孔调制发送器 (支持文本与多包文件)</p>
       </div>
       <span class="badge" id="srBadge">Fs: 48000 Hz</span>
     </header>
@@ -193,38 +238,93 @@
 
       <div>
         <label>输出音量/电平幅度: <span id="volumeVal" class="stat-val">75% (-2.5 dB)</span></label>
-        <div class="slider-container">
-          <input type="range" id="volumeSlider" min="10" max="100" value="75">
-        </div>
+        <input type="range" id="volumeSlider" min="10" max="100" value="75">
         <p style="font-size: 0.72rem; color: var(--text-dim); margin-top: 4px;">
-          💡 提示：连接对录线至对方手机麦克风输入时，建议将系统媒体音量调至 60%~75%，避免过载失真 (Clipping)。
+          💡 提示：连接对录线至对方手机麦克风输入时，建议设置在 60%~75%，避免过载失真 (Clipping)。
         </p>
       </div>
     </div>
 
-    <!-- 发送内容 -->
+    <!-- 发送内容选项卡 -->
     <div class="card">
-      <div class="card-title">
-        <span>✉️ 发送内容录入</span>
-        <span style="font-size: 0.75rem; color: var(--text-dim);" id="charCount">0 字符</span>
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tabText" onclick="switchTab('text')">普通文本报文</button>
+        <button class="tab-btn" id="tabFile" onclick="switchTab('file')">本地文件传输 (File)</button>
       </div>
 
-      <textarea id="messageInput" rows="3" placeholder="在此输入要通过3.5mm音频孔传输的文本内容（如：Hello Phone B!）...">Hello Android via 3.5mm AudioJack!</textarea>
+      <!-- 文本面板 -->
+      <div id="panelText">
+        <div class="card-title">
+          <span>✉️ 发送内容录入</span>
+          <span style="font-size: 0.75rem; color: var(--text-dim);" id="charCount">0 字符</span>
+        </div>
 
-      <div class="quick-tags">
-        <span class="tag" onclick="setMessage('PING-001')">Ping 测试包</span>
-        <span class="tag" onclick="setMessage('LAT:39.9042,LON:116.4074')">GPS 坐标</span>
-        <span class="tag" onclick="setMessage('TEMPER:24.5C,HUMI:60%')">传感器数据</span>
-        <span class="tag" onclick="setMessage('SOS EMERGENCY MSG #99')">紧急求救信</span>
+        <textarea id="messageInput" rows="3" placeholder="在此输入要通过3.5mm音频孔传输的文本内容...">Hello Android via 3.5mm AudioJack!</textarea>
+
+        <div class="quick-tags">
+          <span class="tag" onclick="setMessage('PING-001')">Ping 测试包</span>
+          <span class="tag" onclick="setMessage('LAT:39.9042,LON:116.4074')">GPS 坐标</span>
+          <span class="tag" onclick="setMessage('TEMPER:24.5C,HUMI:60%')">传感器数据</span>
+          <span class="tag" onclick="setMessage('SOS EMERGENCY MSG #99')">紧急求救信</span>
+        </div>
+
+        <button class="btn" id="btnSend">
+          <span id="sendIcon">🔊</span>
+          <span id="sendBtnText">编码并发送文本音频</span>
+        </button>
       </div>
 
-      <button class="btn" id="btnSend">
-        <span id="sendIcon">🔊</span>
-        <span id="sendBtnText">编码并发送音频信号</span>
-      </button>
+      <!-- 文件面板 -->
+      <div id="panelFile" style="display: none;">
+        <input type="file" id="filePicker" style="display: none;">
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('filePicker').click()">
+          <div style="font-size: 1.5rem; margin-bottom: 4px;">📁</div>
+          <div id="fileInfoText" style="font-size: 0.9rem; font-weight: 600; color: #fff;">点击选择本地文件</div>
+          <div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 4px;">
+            支持 JSON、CSV、TXT、密钥等小型文件 (建议小于 4KB)
+          </div>
+        </div>
 
-      <button class="btn btn-secondary" id="btnStop" style="margin-top: 8px; display: none;">
-        ⏹ 停止音频输出
+        <div class="quick-tags" style="margin-bottom: 12px;">
+          <span style="font-size: 0.75rem; color: var(--text-dim); align-self: center;">预设示例:</span>
+          <span class="tag" onclick="loadSample('config.json')">config.json</span>
+          <span class="tag" onclick="loadSample('sensor.csv')">sensor.csv</span>
+          <span class="tag" onclick="loadSample('note.txt')">note.txt</span>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <label>分卷切片大小 (Chunk Size)</label>
+            <select id="chunkSizeSelect">
+              <option value="32">32 字节 (超稳小包)</option>
+              <option value="48" selected>48 字节 (推荐标准)</option>
+              <option value="64">64 字节 (大包高速)</option>
+            </select>
+          </div>
+          <div>
+            <label>分卷数量与耗时预估</label>
+            <div id="fileEstimate" class="stat-val" style="padding-top: 10px; font-size: 0.85rem;">0 分卷 · 0s</div>
+          </div>
+        </div>
+
+        <div id="fileProgressCard" style="display: none; margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.8rem;">
+            <span id="fileProgressDesc" style="color: var(--accent);">正在发送分卷...</span>
+            <span id="fileProgressPercent" class="stat-val">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="fileProgressBar"></div>
+          </div>
+        </div>
+
+        <button class="btn" id="btnSendFile" style="background: var(--success); color: #000;">
+          <span>📦</span>
+          <span>开始音频文件传输</span>
+        </button>
+      </div>
+
+      <button class="btn btn-secondary btn-danger" id="btnStop" style="margin-top: 8px; display: none;">
+        ⏹ 中止音频输出
       </button>
     </div>
 
@@ -260,13 +360,17 @@
 
   <script>
     // ========================================================================
-    // 纯客户端 JavaScript FSK 调制引擎 (支持离线与 GitHub Pages 直接运行)
+    // 纯客户端 JavaScript FSK 调制引擎与文件分卷传输
     // ========================================================================
     let audioCtx = null;
     let currentSourceNode = null;
     let packetSeq = 1;
     let txPacketsCount = 0;
     let txBytesCount = 0;
+    let isCancelled = false;
+
+    // File transfer state
+    let selectedFile = null;
 
     // Hamming(7,4)
     function hammingEncodeNibble(nibble) {
@@ -296,10 +400,63 @@
     const PREAMBLE_BITS = [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0];
     const SYNC_BITS = [1,1,0,1,0,0,1,1,1,0,0,1,0,0,0,1]; // 0xD391
 
+    const PacketType = {
+      TEXT: 0,
+      FILE_START: 1,
+      FILE_DATA: 2,
+      FILE_END: 3
+    };
+
+    function encodePacketToBits(payload, seq, useFEC, packetType = PacketType.TEXT) {
+      const bits = [];
+      for (const b of PREAMBLE_BITS) bits.push(b);
+      for (const b of SYNC_BITS) bits.push(b);
+
+      const flags = (useFEC ? 0x01 : 0x00) | ((packetType & 0x07) << 1);
+      const headerBytes = [seq & 0xff, payload.length & 0xff, flags];
+
+      const crcData = new Uint8Array(headerBytes.length + payload.length);
+      crcData.set(headerBytes, 0);
+      crcData.set(payload, headerBytes.length);
+      const crc = computeCrc16(crcData);
+
+      // Header always protected with Hamming(7,4)
+      for (const byte of headerBytes) {
+        const [h, l] = hammingEncodeByte(byte);
+        for (let i = 6; i >= 0; i--) bits.push((h >> i) & 1);
+        for (let i = 6; i >= 0; i--) bits.push((l >> i) & 1);
+      }
+
+      // Payload
+      if (useFEC) {
+        for (const byte of payload) {
+          const [h, l] = hammingEncodeByte(byte);
+          for (let i = 6; i >= 0; i--) bits.push((h >> i) & 1);
+          for (let i = 6; i >= 0; i--) bits.push((l >> i) & 1);
+        }
+      } else {
+        for (const byte of payload) {
+          for (let i = 7; i >= 0; i--) bits.push((byte >> i) & 1);
+        }
+      }
+
+      // CRC
+      const [ch1, ch2] = hammingEncodeByte((crc >> 8) & 0xff);
+      const [cl1, cl2] = hammingEncodeByte(crc & 0xff);
+      for (let i = 6; i >= 0; i--) bits.push((ch1 >> i) & 1);
+      for (let i = 6; i >= 0; i--) bits.push((ch2 >> i) & 1);
+      for (let i = 6; i >= 0; i--) bits.push((cl1 >> i) & 1);
+      for (let i = 6; i >= 0; i--) bits.push((cl2 >> i) & 1);
+
+      // Guard
+      bits.push(1, 1, 1, 1);
+      return bits;
+    }
+
     function getAudioContext() {
       if (!audioCtx) {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContextClass();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioCtx();
         document.getElementById('srBadge').textContent = 'Fs: ' + audioCtx.sampleRate + ' Hz';
       }
       if (audioCtx.state === 'suspended') {
@@ -308,32 +465,40 @@
       return audioCtx;
     }
 
-    function setMessage(str) {
-      document.getElementById('messageInput').value = str;
-      updateCharCount();
-    }
-
-    function updateCharCount() {
-      const len = document.getElementById('messageInput').value.length;
-      document.getElementById('charCount').textContent = len + ' 字符';
-    }
-
-    document.getElementById('messageInput').addEventListener('input', updateCharCount);
-    updateCharCount();
-
-    // UI Sliders
+    // UI elements
     const markFreqEl = document.getElementById('markFreq');
     const spaceFreqEl = document.getElementById('spaceFreq');
     const volEl = document.getElementById('volumeSlider');
-    markFreqEl.addEventListener('input', () => document.getElementById('markFreqVal').textContent = markFreqEl.value + ' Hz');
-    spaceFreqEl.addEventListener('input', () => document.getElementById('spaceFreqVal').textContent = spaceFreqEl.value + ' Hz');
+    const charCountEl = document.getElementById('charCount');
+    const msgInput = document.getElementById('messageInput');
+
+    markFreqEl.addEventListener('input', () => {
+      document.getElementById('markFreqVal').textContent = markFreqEl.value + ' Hz';
+    });
+    spaceFreqEl.addEventListener('input', () => {
+      document.getElementById('spaceFreqVal').textContent = spaceFreqEl.value + ' Hz';
+    });
     volEl.addEventListener('input', () => {
-      const pct = volEl.value;
-      const db = (20 * Math.log10(pct / 100)).toFixed(1);
-      document.getElementById('volumeVal').textContent = pct + '% (' + db + ' dB)';
+      const db = (20 * Math.log10(parseFloat(volEl.value) / 100)).toFixed(1);
+      document.getElementById('volumeVal').textContent = volEl.value + '% (' + db + ' dB)';
+    });
+    msgInput.addEventListener('input', () => {
+      charCountEl.textContent = msgInput.value.length + ' 字符';
     });
 
-    // 波形绘制
+    function setMessage(text) {
+      msgInput.value = text;
+      charCountEl.textContent = text.length + ' 字符';
+    }
+
+    function switchTab(tab) {
+      document.getElementById('tabText').classList.toggle('active', tab === 'text');
+      document.getElementById('tabFile').classList.toggle('active', tab === 'file');
+      document.getElementById('panelText').style.display = tab === 'text' ? 'block' : 'none';
+      document.getElementById('panelFile').style.display = tab === 'file' ? 'block' : 'none';
+    }
+
+    // Oscilloscope canvas
     const canvas = document.getElementById('scopeCanvas');
     const ctx = canvas.getContext('2d');
     function resizeCanvas() {
@@ -346,8 +511,6 @@
     function drawWaveform(samples) {
       ctx.fillStyle = '#070a12';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Grid
       ctx.strokeStyle = '#1a2234';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -356,7 +519,6 @@
       ctx.stroke();
 
       if (!samples || samples.length === 0) return;
-
       ctx.strokeStyle = '#06b6d4';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -372,7 +534,7 @@
     }
     drawWaveform(null);
 
-    // 校准音播放
+    // Tone calibration
     let testOsc = null;
     document.getElementById('btnTone1200').addEventListener('click', () => {
       const ac = getAudioContext();
@@ -396,9 +558,65 @@
       document.getElementById('txStatus').textContent = '正在输出 1200Hz 校准正弦波...';
     });
 
-    // 编码与发送
-    document.getElementById('btnSend').addEventListener('click', () => {
-      const text = document.getElementById('messageInput').value.trim();
+    // Modulate bits into audio samples
+    function modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude) {
+      const samplesPerSymbol = Math.round(sampleRate / baudRate);
+      const totalSamples = bits.length * samplesPerSymbol + Math.round(sampleRate * 0.05);
+      const buffer = new Float32Array(totalSamples);
+
+      let phase = 0;
+      const twoPi = 2 * Math.PI;
+      const leadSamples = Math.round(sampleRate * 0.02);
+      let idx = leadSamples;
+
+      for (let b = 0; b < bits.length; b++) {
+        const bit = bits[b];
+        const freq = bit === 1 ? markFreq : spaceFreq;
+        const phaseInc = (twoPi * freq) / sampleRate;
+        for (let s = 0; s < samplesPerSymbol; s++) {
+          buffer[idx++] = amplitude * Math.sin(phase);
+          phase += phaseInc;
+          if (phase > twoPi) phase -= twoPi;
+        }
+      }
+
+      // Smooth envelope ramp
+      const ramp = Math.min(Math.round(sampleRate * 0.015), leadSamples);
+      for (let i = 0; i < ramp; i++) {
+        const env = 0.5 * (1 - Math.cos((Math.PI * i) / ramp));
+        const hIdx = leadSamples - ramp + i;
+        if (hIdx >= 0) buffer[hIdx] *= env;
+      }
+      for (let i = 0; i < ramp && idx + i < totalSamples; i++) {
+        const env = 0.5 * (1 + Math.cos((Math.PI * i) / ramp));
+        buffer[idx + i] *= env;
+      }
+
+      return buffer;
+    }
+
+    // Play modulated buffer
+    function playAudioSamples(samples, sampleRate) {
+      const ac = getAudioContext();
+      if (currentSourceNode) {
+        try { currentSourceNode.stop(); } catch(e) {}
+      }
+      const audioBuffer = ac.createBuffer(1, samples.length, sampleRate);
+      audioBuffer.getChannelData(0).set(samples);
+      const source = ac.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ac.destination);
+      currentSourceNode = source;
+
+      return new Promise((resolve) => {
+        source.onended = () => resolve();
+        source.start();
+      });
+    }
+
+    // --- TEXT SEND ---
+    document.getElementById('btnSend').addEventListener('click', async () => {
+      const text = msgInput.value.trim();
       if (!text) {
         alert('请输入要发送的内容！');
         return;
@@ -412,124 +630,170 @@
       const spaceFreq = parseFloat(spaceFreqEl.value);
       const amplitude = parseFloat(volEl.value) / 100;
 
-      // 1. 组装比特流
       const payload = new TextEncoder().encode(text);
-      const bits = [];
+      const bits = encodePacketToBits(payload, packetSeq, useFEC, PacketType.TEXT);
+      const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
 
-      // Preamble & Sync
-      for (const b of PREAMBLE_BITS) bits.push(b);
-      for (const b of SYNC_BITS) bits.push(b);
+      drawWaveform(samples);
 
-      // Header: seq, len, flags
-      const flags = useFEC ? 0x01 : 0x00;
-      const headerBytes = [packetSeq & 0xff, payload.length & 0xff, flags];
-
-      // Checksum data: header + payload
-      const crcData = new Uint8Array(headerBytes.length + payload.length);
-      crcData.set(headerBytes, 0);
-      crcData.set(payload, headerBytes.length);
-      const crc = computeCrc16(crcData);
-
-      // Encode header
-      for (const byte of headerBytes) {
-        const [h, l] = hammingEncodeByte(byte);
-        for (let i = 6; i >= 0; i--) bits.push((h >> i) & 1);
-        for (let i = 6; i >= 0; i--) bits.push((l >> i) & 1);
-      }
-
-      // Encode payload
-      if (useFEC) {
-        for (const byte of payload) {
-          const [h, l] = hammingEncodeByte(byte);
-          for (let i = 6; i >= 0; i--) bits.push((h >> i) & 1);
-          for (let i = 6; i >= 0; i--) bits.push((l >> i) & 1);
-        }
-      } else {
-        for (const byte of payload) {
-          for (let i = 7; i >= 0; i--) bits.push((byte >> i) & 1);
-        }
-      }
-
-      // Encode CRC
-      const [ch1, ch2] = hammingEncodeByte((crc >> 8) & 0xff);
-      const [cl1, cl2] = hammingEncodeByte(crc & 0xff);
-      for (let i = 6; i >= 0; i--) bits.push((ch1 >> i) & 1);
-      for (let i = 6; i >= 0; i--) bits.push((ch2 >> i) & 1);
-      for (let i = 6; i >= 0; i--) bits.push((cl1 >> i) & 1);
-      for (let i = 6; i >= 0; i--) bits.push((cl2 >> i) & 1);
-
-      // Guard bits
-      bits.push(1, 1, 1, 1);
-
-      // 2. CPFSK 调制为音频样本
-      const samplesPerSymbol = Math.round(sampleRate / baudRate);
-      const totalSamples = bits.length * samplesPerSymbol + Math.round(sampleRate * 0.05);
-      const audioBuffer = ac.createBuffer(1, totalSamples, sampleRate);
-      const channelData = audioBuffer.getChannelData(0);
-
-      let phase = 0;
-      const twoPi = 2 * Math.PI;
-      const leadSamples = Math.round(sampleRate * 0.02);
-      let idx = leadSamples;
-
-      for (let bitIdx = 0; bitIdx < bits.length; bitIdx++) {
-        const bit = bits[bitIdx];
-        const freq = bit === 1 ? markFreq : spaceFreq;
-        const phaseInc = (twoPi * freq) / sampleRate;
-
-        for (let s = 0; s < samplesPerSymbol; s++) {
-          channelData[idx++] = amplitude * Math.sin(phase);
-          phase += phaseInc;
-          if (phase > twoPi) phase -= twoPi;
-        }
-      }
-
-      // 平滑包络窗
-      const ramp = Math.min(Math.round(sampleRate * 0.015), leadSamples);
-      for (let i = 0; i < ramp; i++) {
-        const env = 0.5 * (1 - Math.cos((Math.PI * i) / ramp));
-        const hIdx = leadSamples - ramp + i;
-        if (hIdx >= 0) channelData[hIdx] *= env;
-      }
-      for (let i = 0; i < ramp && idx + i < totalSamples; i++) {
-        const env = 0.5 * (1 + Math.cos((Math.PI * i) / ramp));
-        channelData[idx + i] *= env;
-      }
-
-      // 绘制波形
-      drawWaveform(channelData);
-
-      // 3. 播放音频
-      if (currentSourceNode) {
-        try { currentSourceNode.stop(); } catch(e) {}
-      }
-
-      const source = ac.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ac.destination);
-
-      const durationSec = (totalSamples / sampleRate).toFixed(2);
+      const durationSec = (samples.length / sampleRate).toFixed(2);
       document.getElementById('statFrameDuration').textContent = bits.length + ' bits / ' + durationSec + 's';
       document.getElementById('txStatus').textContent = '正在播放音频传输数据 (Seq #' + packetSeq + ')...';
       document.getElementById('txStatus').style.color = '#38bdf8';
       document.getElementById('btnStop').style.display = 'block';
 
-      source.onended = () => {
-        document.getElementById('txStatus').textContent = '已完成发送 (Seq #' + packetSeq + ')';
-        document.getElementById('txStatus').style.color = '#10b981';
-        document.getElementById('btnStop').style.display = 'none';
+      await playAudioSamples(samples, sampleRate);
+
+      document.getElementById('txStatus').textContent = '已完成发送 (Seq #' + packetSeq + ')';
+      document.getElementById('txStatus').style.color = '#10b981';
+      document.getElementById('btnStop').style.display = 'none';
+      txPacketsCount++;
+      txBytesCount += payload.length;
+      packetSeq++;
+      document.getElementById('statTxPackets').textContent = txPacketsCount;
+      document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
+    });
+
+    // --- FILE TRANSFER ---
+    document.getElementById('filePicker').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        selectedFile = {
+          name: file.name,
+          data: new Uint8Array(reader.result),
+          size: file.size,
+          mime: file.type || 'application/octet-stream'
+        };
+        updateFileInfo();
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    function loadSample(name) {
+      let content = '{"device":"3.5mm-AudioModem","status":"OK","baud":100}';
+      let mime = 'application/json';
+      if (name === 'sensor.csv') {
+        content = 'time,temp,hum\n100,25.4,60\n101,25.5,59';
+        mime = 'text/csv';
+      } else if (name === 'note.txt') {
+        content = 'AudioJack 3.5mm 通信协议测试文本文件。';
+        mime = 'text/plain';
+      }
+      const data = new TextEncoder().encode(content);
+      selectedFile = { name, data, size: data.length, mime };
+      updateFileInfo();
+    }
+
+    function updateFileInfo() {
+      if (!selectedFile) return;
+      document.getElementById('fileInfoText').textContent = selectedFile.name + ' (' + selectedFile.size + ' 字节)';
+      const chunkSize = parseInt(document.getElementById('chunkSizeSelect').value);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const totalPackets = totalChunks + 2;
+      const estSec = Math.ceil((totalPackets * (132 + chunkSize * 14)) / baudRate);
+      document.getElementById('fileEstimate').textContent = totalChunks + ' 分卷 · 约 ' + estSec + ' 秒';
+    }
+    document.getElementById('chunkSizeSelect').addEventListener('change', updateFileInfo);
+
+    document.getElementById('btnSendFile').addEventListener('click', async () => {
+      if (!selectedFile) {
+        alert('请先选择或载入一个文件！');
+        return;
+      }
+
+      const ac = getAudioContext();
+      const sampleRate = ac.sampleRate;
+      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const useFEC = document.getElementById('fecSelect').value === 'hamming';
+      const markFreq = parseFloat(markFreqEl.value);
+      const spaceFreq = parseFloat(spaceFreqEl.value);
+      const amplitude = parseFloat(volEl.value) / 100;
+      const chunkSize = parseInt(document.getElementById('chunkSizeSelect').value);
+
+      // Create chunks
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const packets = [];
+
+      // 1. FILE_START
+      const startJson = JSON.stringify({ name: selectedFile.name, size: selectedFile.size, chunks: totalChunks, mime: selectedFile.mime });
+      packets.push({
+        type: PacketType.FILE_START,
+        payload: new TextEncoder().encode(startJson),
+        desc: '启动帧: ' + selectedFile.name
+      });
+
+      // 2. FILE_DATA
+      for (let c = 0; c < totalChunks; c++) {
+        const slice = selectedFile.data.subarray(c * chunkSize, Math.min(selectedFile.size, (c + 1) * chunkSize));
+        const chunkPayload = new Uint8Array(4 + slice.length);
+        chunkPayload[0] = (c >> 8) & 0xff;
+        chunkPayload[1] = c & 0xff;
+        chunkPayload[2] = (totalChunks >> 8) & 0xff;
+        chunkPayload[3] = totalChunks & 0xff;
+        chunkPayload.set(slice, 4);
+
+        packets.push({
+          type: PacketType.FILE_DATA,
+          payload: chunkPayload,
+          desc: '分卷 [' + (c + 1) + '/' + totalChunks + ']'
+        });
+      }
+
+      // 3. FILE_END
+      const endJson = JSON.stringify({ name: selectedFile.name, size: selectedFile.size, crc: computeCrc16(selectedFile.data) });
+      packets.push({
+        type: PacketType.FILE_END,
+        payload: new TextEncoder().encode(endJson),
+        desc: '结束帧: ' + selectedFile.name
+      });
+
+      isCancelled = false;
+      document.getElementById('fileProgressCard').style.display = 'block';
+      document.getElementById('btnStop').style.display = 'block';
+
+      for (let i = 0; i < packets.length; i++) {
+        if (isCancelled) break;
+        const pkt = packets[i];
+        const percent = Math.round(((i + 1) / packets.length) * 100);
+
+        document.getElementById('fileProgressDesc').textContent = '正在发送 ' + pkt.desc;
+        document.getElementById('fileProgressPercent').textContent = percent + '%';
+        document.getElementById('fileProgressBar').style.width = percent + '%';
+
+        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type);
+        const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+
+        drawWaveform(samples);
+        const durationSec = (samples.length / sampleRate).toFixed(2);
+        document.getElementById('statFrameDuration').textContent = '[' + (i + 1) + '/' + packets.length + '] ' + durationSec + 's';
+        document.getElementById('txStatus').textContent = '正在发送音频: ' + pkt.desc;
+
+        await playAudioSamples(samples, sampleRate);
+
         txPacketsCount++;
-        txBytesCount += payload.length;
+        txBytesCount += pkt.payload.length;
         packetSeq++;
         document.getElementById('statTxPackets').textContent = txPacketsCount;
         document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
-      };
 
-      source.start();
-      currentSourceNode = source;
+        // Guard silence interval
+        if (i < packets.length - 1 && !isCancelled) {
+          await new Promise(r => setTimeout(r, 80));
+        }
+      }
+
+      document.getElementById('btnStop').style.display = 'none';
+      if (!isCancelled) {
+        document.getElementById('txStatus').textContent = '✓ 文件 ' + selectedFile.name + ' 全部分卷发送完成！';
+        document.getElementById('txStatus').style.color = '#10b981';
+      }
     });
 
     document.getElementById('btnStop').addEventListener('click', () => {
+      isCancelled = true;
       if (currentSourceNode) {
         try { currentSourceNode.stop(); } catch(e) {}
         currentSourceNode = null;

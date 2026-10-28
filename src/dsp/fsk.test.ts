@@ -11,6 +11,9 @@ import {
   FrameEncoder,
   FSKModulator,
   FSKDemodulator,
+  FileChunker,
+  FileAssembler,
+  PacketType,
   DEFAULT_CONFIG,
 } from './fsk';
 
@@ -130,5 +133,65 @@ test('Streaming audio in realistic small chunks (1024 samples) with leading sile
   assert.equal(allDecoded[0].seq, 88);
   assert.equal(allDecoded[0].crcValid, true);
   assert.equal(allDecoded[0].text, message);
+});
+
+test('FileTransfer: chunking, FSK modulation, streaming demodulation and assembly', () => {
+  const filename = 'sensor_data.json';
+  const fileContent = JSON.stringify({
+    sensor: 'AudioJack-Modem',
+    reading: 42.5,
+    status: 'OK',
+    notes: 'Testing multi-chunk file transfer over 3.5mm FSK audio cable!',
+  });
+  const fileBytes = new TextEncoder().encode(fileContent);
+  const config = { ...DEFAULT_CONFIG, sampleRate: 48000, baudRate: 200, useFEC: true };
+
+  // 1. Split file into chunks of 32 bytes
+  const filePackets = FileChunker.createFilePackets(filename, fileBytes, 'application/json', 32, true, 1);
+  assert.ok(filePackets.length >= 3, 'Should produce at least FILE_START, FILE_DATA, and FILE_END');
+
+  // 2. Modulate each packet into audio and concatenate with 50ms guard pauses
+  const guardSamples = Math.round(config.sampleRate * 0.05);
+  let totalLen = 0;
+  const audioChunks: Float32Array[] = [];
+
+  for (const p of filePackets) {
+    const audio = FSKModulator.modulate(p.bits, config);
+    audioChunks.push(audio);
+    totalLen += audio.length + guardSamples;
+  }
+
+  const fullAudio = new Float32Array(totalLen);
+  let writeOffset = 0;
+  for (const audio of audioChunks) {
+    fullAudio.set(audio, writeOffset);
+    writeOffset += audio.length + guardSamples;
+  }
+
+  // 3. Demodulate and assemble using FileAssembler
+  const demodulator = new FSKDemodulator(config);
+  const assembler = new FileAssembler();
+  let completedFile: any = null;
+
+  assembler.onComplete = (file) => {
+    completedFile = file;
+  };
+
+  // Stream in 1024-sample chunks
+  const CHUNK_SIZE = 1024;
+  for (let offset = 0; offset < fullAudio.length; offset += CHUNK_SIZE) {
+    const slice = fullAudio.subarray(offset, Math.min(fullAudio.length, offset + CHUNK_SIZE));
+    const pkts = demodulator.processAudioBuffer(slice);
+    for (const pkt of pkts) {
+      assembler.processPacket(pkt);
+    }
+  }
+
+  assert.ok(completedFile !== null, 'FileAssembler should emit completed file');
+  assert.equal(completedFile.name, filename);
+  assert.equal(completedFile.size, fileBytes.length);
+  assert.equal(completedFile.crcValid, true, 'Reassembled file CRC must match');
+  const reconstructedText = new TextDecoder('utf-8').decode(completedFile.data);
+  assert.equal(reconstructedText, fileContent);
 });
 
