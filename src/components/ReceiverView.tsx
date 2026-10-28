@@ -169,36 +169,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     render();
   }, []);
 
-  // Streaming demodulation timer
-  const startDemodWorker = useCallback(() => {
-    const timer = setInterval(() => {
-      const demod = demodulatorRef.current;
-      const actx = audioCtxRef.current;
-      if (!demod || !actx) return;
 
-      const sps = Math.round(actx.sampleRate / baudRate);
-      const available = totalSamplesRef.current - lastProcessedRef.current;
-      if (available < sps * 4) return;
-
-      const processCount = Math.min(available, 4096);
-      const chunk = new Float32Array(processCount);
-      const buffer = ringBufferRef.current;
-      const size = buffer.length;
-
-      for (let i = 0; i < processCount; i++) {
-        const readIdx = (lastProcessedRef.current + i) % size;
-        chunk[i] = buffer[readIdx];
-      }
-      lastProcessedRef.current += processCount;
-
-      const packets = demod.processAudioBuffer(chunk);
-      for (const pkt of packets) {
-        handleNewPacket(pkt);
-      }
-    }, 50);
-
-    return () => clearInterval(timer);
-  }, [baudRate, handleNewPacket]);
 
   // Start hardware microphone / line-in capture
   const startListening = async () => {
@@ -240,16 +211,12 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
       sp.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
-        const buf = ringBufferRef.current;
-        const size = buf.length;
-        let w = writeIdxRef.current;
-
-        for (let i = 0; i < inputData.length; i++) {
-          buf[w] = inputData[i];
-          w = (w + 1) % size;
+        if (demodulatorRef.current) {
+          const pkts = demodulatorRef.current.processAudioBuffer(inputData);
+          for (const pkt of pkts) {
+            handleNewPacket(pkt);
+          }
         }
-        writeIdxRef.current = w;
-        totalSamplesRef.current += inputData.length;
       };
 
       setIsListening(true);
@@ -266,7 +233,6 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
       }
 
       startVisualizer();
-      startDemodWorker();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`启动麦克风监听失败: ${msg}`);

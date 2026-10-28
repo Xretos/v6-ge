@@ -158,7 +158,7 @@ export const ProtocolBenchmarkView: React.FC = () => {
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
               <div className="text-cyan-400 font-bold mb-1">1. 运行时动态重定标</div>
               <p className="text-slate-400 text-[11px]">
-                调制器与解调器不写死采样点常数，通过 <code>actx.sampleRate</code> 动态计算每个符号对应的离散点数 $N = \text{round}(F_s / \text{BaudRate})$。例如 48kHz 下 100 baud 为 480 点，44.1kHz 下自动缩放为 441 点。
+                调制器与解调器不写死采样点常数，通过 <code>actx.sampleRate</code> 动态计算每个符号对应的离散点数 N = Math.round(Fs / BaudRate)。例如 48kHz 下 100 baud 为 480 点，44.1kHz 下自动缩放为 441 点。
               </p>
             </div>
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">

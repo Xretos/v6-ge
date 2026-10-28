@@ -117,7 +117,7 @@ export class CRC16 {
 // ============================================================================
 // 3. PACKET & PROTOCOL DEFINITIONS
 // ============================================================================
-export const PREAMBLE_BITS = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]; // 16 bits
+export const PREAMBLE_BITS = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]; // 24 bits for rock-solid lock
 export const SYNC_WORD = 0xd391; // 16-bit Barker-like sync sequence: 11010011 10010001
 export const SYNC_BITS = [1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1]; // 16 bits
 
@@ -126,7 +126,7 @@ export interface ModemConfig {
   baudRate: number;        // e.g. 100, 150, 200, 300 baud
   markFreq: number;        // bit '1' frequency (e.g. 1200 Hz)
   spaceFreq: number;       // bit '0' frequency (e.g. 2200 Hz)
-  amplitude: number;       // 0.0 - 1.0 (recommended 0.7 to avoid DAC/Mic clipping)
+  amplitude: number;       // 0.0 - 1.0 (recommended 0.75)
   useFEC: boolean;         // Enable Hamming(7,4) forward error correction
 }
 
@@ -138,12 +138,6 @@ export const DEFAULT_CONFIG: ModemConfig = {
   amplitude: 0.75,
   useFEC: true,
 };
-
-export interface PacketHeader {
-  seq: number;       // 0-255 packet sequence number
-  len: number;       // Payload length in bytes
-  flags: number;     // bit 0: FEC enabled
-}
 
 export interface DecodedPacket {
   seq: number;
@@ -219,8 +213,8 @@ export class FrameEncoder {
     for (let i = 6; i >= 0; i--) bits.push((cl1 >> i) & 1);
     for (let i = 6; i >= 0; i--) bits.push((cl2 >> i) & 1);
 
-    // 8. Flush guard bits (4 bits of 1s)
-    bits.push(1, 1, 1, 1);
+    // 8. Flush guard bits (8 bits of 1s)
+    bits.push(1, 1, 1, 1, 1, 1, 1, 1);
 
     return bits;
   }
@@ -237,12 +231,12 @@ export class FSKModulator {
   static modulate(bits: number[], config: ModemConfig): Float32Array {
     const { sampleRate, baudRate, markFreq, spaceFreq, amplitude } = config;
     const samplesPerSymbol = Math.round(sampleRate / baudRate);
-    const totalSamples = bits.length * samplesPerSymbol + Math.round(sampleRate * 0.05); // +50ms lead/trail guard
+    const totalSamples = bits.length * samplesPerSymbol + Math.round(sampleRate * 0.08); // +80ms lead/trail guard
     const output = new Float32Array(totalSamples);
 
     let phase = 0;
     const twoPi = 2 * Math.PI;
-    const leadGuardSamples = Math.round(sampleRate * 0.02); // 20ms lead
+    const leadGuardSamples = Math.round(sampleRate * 0.04); // 40ms lead silence
 
     let sampleIdx = leadGuardSamples;
 
@@ -259,7 +253,7 @@ export class FSKModulator {
     }
 
     // Apply smooth Tukey/Hann windowing on start and end
-    const rampSamples = Math.min(Math.round(sampleRate * 0.015), leadGuardSamples);
+    const rampSamples = Math.min(Math.round(sampleRate * 0.02), leadGuardSamples);
     for (let i = 0; i < rampSamples; i++) {
       const env = 0.5 * (1 - Math.cos((Math.PI * i) / rampSamples));
       const headIdx = leadGuardSamples - rampSamples + i;
@@ -276,20 +270,33 @@ export class FSKModulator {
 }
 
 // ============================================================================
-// 6. AUDIO DEMODULATOR: Matched Quadrature I/Q Filter + Timing Recovery
+// 6. CONTINUOUS STREAMING FSK DEMODULATOR: DPLL + Adaptive Equalizer
 // ============================================================================
 export class FSKDemodulator {
-  private config: ModemConfig;
-  private samplesPerSymbol: number;
+  public config: ModemConfig;
+  public samplesPerSymbol: number;
 
-  // Correlator sliding buffers
+  // Quadrature sin/cos reference tables
   private markCosTable: Float32Array;
   private markSinTable: Float32Array;
   private spaceCosTable: Float32Array;
   private spaceSinTable: Float32Array;
 
-  // Stream state
-  private rawBitBuffer: number[] = [];
+  // Streaming sample buffer (retains unconsumed audio samples across chunk boundaries)
+  private sampleBuffer: number[] = [];
+
+  // Persistent streaming bit buffer
+  private bitBuffer: number[] = [];
+
+  // Symbol clock recovery & tracking state (DPLL)
+  private clockPhase: number = 0;
+  private lastDiscriminator: number = 0;
+
+  // Adaptive channel equalizer (balances 1200Hz vs 2200Hz phone mic gain differences)
+  private maxMarkEnergy: number = 0.001;
+  private maxSpaceEnergy: number = 0.001;
+
+  // Callbacks
   private onPacketCallback?: (packet: DecodedPacket) => void;
   private onSignalQualityCallback?: (quality: { snrDb: number; markEnergy: number; spaceEnergy: number; rms: number }) => void;
 
@@ -297,11 +304,11 @@ export class FSKDemodulator {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.samplesPerSymbol = Math.round(this.config.sampleRate / this.config.baudRate);
 
-    // Precalculate quadrature sine/cosine tables for matched filter correlation
-    this.markCosTable = new Float32Array(this.samplesPerSymbol);
-    this.markSinTable = new Float32Array(this.samplesPerSymbol);
-    this.spaceCosTable = new Float32Array(this.samplesPerSymbol);
-    this.spaceSinTable = new Float32Array(this.samplesPerSymbol);
+    const N = this.samplesPerSymbol;
+    this.markCosTable = new Float32Array(N);
+    this.markSinTable = new Float32Array(N);
+    this.spaceCosTable = new Float32Array(N);
+    this.spaceSinTable = new Float32Array(N);
 
     this.rebuildTables();
   }
@@ -310,6 +317,16 @@ export class FSKDemodulator {
     this.config = { ...this.config, ...newConfig };
     this.samplesPerSymbol = Math.round(this.config.sampleRate / this.config.baudRate);
     this.rebuildTables();
+    this.reset();
+  }
+
+  public reset() {
+    this.sampleBuffer = [];
+    this.bitBuffer = [];
+    this.clockPhase = 0;
+    this.lastDiscriminator = 0;
+    this.maxMarkEnergy = 0.001;
+    this.maxSpaceEnergy = 0.001;
   }
 
   private rebuildTables() {
@@ -338,77 +355,130 @@ export class FSKDemodulator {
   }
 
   /**
-   * Demodulates an entire audio buffer or batch.
-   * Performs matched filter correlation across sliding symbol windows.
+   * Main entrypoint for streaming audio samples.
+   * Can accept audio of ANY buffer size (e.g. 512, 1024, 2048, 4096 or full buffers).
+   * Maintains continuous phase and symbol tracking across chunk calls.
    */
-  public processAudioBuffer(samples: Float32Array): DecodedPacket[] {
+  public processAudioBuffer(incoming: Float32Array): DecodedPacket[] {
     const packets: DecodedPacket[] = [];
+    if (!incoming || incoming.length === 0) return packets;
+
+    // Append incoming samples to continuous stream buffer
+    for (let i = 0; i < incoming.length; i++) {
+      this.sampleBuffer.push(incoming[i]);
+    }
+
     const N = this.samplesPerSymbol;
-    if (samples.length < N * 2) return packets;
+    // Step stride: evaluate discriminator every S samples (oversampling by 8x for tight symbol phase sync)
+    const S = Math.max(1, Math.floor(N / 8));
 
-    // Calculate overall RMS for silence/carrier detection
-    let sumSq = 0;
-    for (let i = 0; i < samples.length; i++) {
-      sumSq += samples[i] * samples[i];
-    }
-    const rms = Math.sqrt(sumSq / samples.length);
+    let processedSamples = 0;
+    let snrSum = 0;
+    let snrSamplesCount = 0;
 
-    // If signal is virtually dead silence (e.g. cable unplugged), skip
-    if (rms < 0.005) {
-      if (this.onSignalQualityCallback) {
-        this.onSignalQualityCallback({ snrDb: 0, markEnergy: 0, spaceEnergy: 0, rms });
-      }
-      return packets;
-    }
-
-    // Step through audio in symbol-sized strides
-    // For optimal symbol boundary alignment, we test preamble correlation
-    const detectedBits: number[] = [];
-    let avgSnrDb = 0;
-    let symbolCount = 0;
-
-    // Coarse symbol sweep with half-symbol oversampling or peak energy search
-    // To find the optimal offset phase (0..N-1) using the 16-bit preamble:
-    const bestOffset = this.findSymbolAlignment(samples);
-
-    for (let offset = bestOffset; offset + N <= samples.length; offset += N) {
+    // Sliding window matched filter
+    while (this.sampleBuffer.length >= N + S) {
+      // Calculate matched filter correlation over window [0 .. N-1]
       let markI = 0, markQ = 0;
       let spaceI = 0, spaceQ = 0;
+      let sumSq = 0;
 
       for (let n = 0; n < N; n++) {
-        const val = samples[offset + n];
-        markI += val * this.markCosTable[n];
-        markQ += val * this.markSinTable[n];
-        spaceI += val * this.spaceCosTable[n];
-        spaceQ += val * this.spaceSinTable[n];
+        const s = this.sampleBuffer[n];
+        sumSq += s * s;
+        markI += s * this.markCosTable[n];
+        markQ += s * this.markSinTable[n];
+        spaceI += s * this.spaceCosTable[n];
+        spaceQ += s * this.spaceSinTable[n];
       }
 
-      const markEnergy = (markI * markI + markQ * markQ) / (N * N);
-      const spaceEnergy = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
+      const rms = Math.sqrt(sumSq / N);
+      const markE = (markI * markI + markQ * markQ) / (N * N);
+      const spaceE = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
+      const totalCarrierEnergy = markE + spaceE;
 
-      // Decision rule: mark vs space
-      const bit = markEnergy >= spaceEnergy ? 1 : 0;
-      detectedBits.push(bit);
+      // Squelch threshold: if audio level is too quiet (< -40 dBFS), skip bit decisions
+      if (rms < 0.004 || totalCarrierEnergy < 1e-7) {
+        // In silence, slowly decay equalizer references
+        this.maxMarkEnergy = Math.max(0.001, this.maxMarkEnergy * 0.99);
+        this.maxSpaceEnergy = Math.max(0.001, this.maxSpaceEnergy * 0.99);
 
-      // Compute local SNR approximation
-      const activeE = Math.max(markEnergy, spaceEnergy);
-      const inactiveE = Math.min(markEnergy, spaceEnergy);
-      const snr = inactiveE > 0 ? 10 * Math.log10(activeE / inactiveE) : 30;
-      avgSnrDb += Math.min(Math.max(snr, 0), 40);
-      symbolCount++;
+        // Advance sample buffer by S
+        this.sampleBuffer.splice(0, S);
+        processedSamples += S;
+        this.clockPhase = 0;
+        continue;
+      }
+
+      // Dynamic Equalization: phone microphones have high-frequency roll-off (2200Hz is attenuated compared to 1200Hz)
+      // Track peak energies and normalize
+      this.maxMarkEnergy = Math.max(markE, this.maxMarkEnergy * 0.998);
+      this.maxSpaceEnergy = Math.max(spaceE, this.maxSpaceEnergy * 0.998);
+
+      const normMarkE = markE / Math.max(1e-6, this.maxMarkEnergy);
+      const normSpaceE = spaceE / Math.max(1e-6, this.maxSpaceEnergy);
+
+      // Discriminator metric: >0 = Mark (1), <0 = Space (0)
+      const discriminator = normMarkE - normSpaceE;
+
+      // Local SNR calculation
+      const higherE = Math.max(normMarkE, normSpaceE);
+      const lowerE = Math.min(normMarkE, normSpaceE) + 1e-6;
+      const localSnrDb = Math.min(45, Math.max(0, 10 * Math.log10(higherE / lowerE)));
+      snrSum += localSnrDb;
+      snrSamplesCount++;
+
+      // Symbol Clock Recovery (DPLL):
+      // A zero-crossing of discriminator indicates a transition between Mark and Space (symbol boundary)
+      if (this.lastDiscriminator * discriminator < 0) {
+        // Transition detected!
+        // Ideal transition phase is 0. Calculate phase error:
+        let phaseError = this.clockPhase;
+        if (phaseError > N / 2) {
+          phaseError -= N;
+        }
+        // Nudge DPLL clock phase towards 0 (loop gain alpha = 0.35)
+        this.clockPhase -= Math.round(phaseError * 0.35);
+      }
+      this.lastDiscriminator = discriminator;
+
+      // Advance symbol clock
+      const prevClock = this.clockPhase;
+      this.clockPhase += S;
+
+      // When the clock phase passes through the middle of the symbol (N/2, optimal eye opening):
+      // Sample the bit!
+      if (prevClock < N / 2 && this.clockPhase >= N / 2) {
+        const bit = discriminator >= 0 ? 1 : 0;
+        this.bitBuffer.push(bit);
+
+        // Limit bit buffer length to prevent memory leaks
+        if (this.bitBuffer.length > 2500) {
+          this.bitBuffer.splice(0, 1000);
+        }
+      }
+
+      // Symbol period wrap-around
+      if (this.clockPhase >= N) {
+        this.clockPhase -= N;
+      }
+
+      // Consume S samples from audio buffer
+      this.sampleBuffer.splice(0, S);
+      processedSamples += S;
     }
 
-    if (symbolCount > 0 && this.onSignalQualityCallback) {
+    if (snrSamplesCount > 0 && this.onSignalQualityCallback) {
       this.onSignalQualityCallback({
-        snrDb: avgSnrDb / symbolCount,
-        markEnergy: 1,
-        spaceEnergy: 1,
-        rms
+        snrDb: Math.round(snrSum / snrSamplesCount),
+        markEnergy: this.maxMarkEnergy,
+        spaceEnergy: this.maxSpaceEnergy,
+        rms: Math.sqrt(this.maxMarkEnergy + this.maxSpaceEnergy),
       });
     }
 
-    // Parse packets from detected bit stream
-    const decoded = this.parsePacketsFromBits(detectedBits);
+    // Parse packets from bit buffer
+    const decoded = this.parsePacketsFromBitBuffer();
     for (const pkt of decoded) {
       packets.push(pkt);
       if (this.onPacketCallback) this.onPacketCallback(pkt);
@@ -418,129 +488,91 @@ export class FSKDemodulator {
   }
 
   /**
-   * Finds the best symbol phase offset (0..samplesPerSymbol-1) by maximizing
-   * correlation with the known preamble sequence.
+   * Parses complete frames from the streaming bit buffer.
+   * Tolerates 1-bit error in the 16-bit sync word to avoid dropping frames on minor clicks.
    */
-  private findSymbolAlignment(samples: Float32Array): number {
-    const N = this.samplesPerSymbol;
-    const testOffsets = [0, Math.floor(N * 0.25), Math.floor(N * 0.5), Math.floor(N * 0.75)];
-    let bestOffset = 0;
-    let maxDiffEnergy = -1;
-
-    for (const offset of testOffsets) {
-      let diffSum = 0;
-      const symbolsToCheck = Math.min(16, Math.floor((samples.length - offset) / N));
-      if (symbolsToCheck < 8) continue;
-
-      for (let s = 0; s < symbolsToCheck; s++) {
-        let markI = 0, markQ = 0, spaceI = 0, spaceQ = 0;
-        const base = offset + s * N;
-        for (let n = 0; n < N; n++) {
-          const val = samples[base + n];
-          markI += val * this.markCosTable[n];
-          markQ += val * this.markSinTable[n];
-          spaceI += val * this.spaceCosTable[n];
-          spaceQ += val * this.spaceSinTable[n];
-        }
-        const markE = markI * markI + markQ * markQ;
-        const spaceE = spaceI * spaceI + spaceQ * spaceQ;
-        diffSum += Math.abs(markE - spaceE);
-      }
-
-      if (diffSum > maxDiffEnergy) {
-        maxDiffEnergy = diffSum;
-        bestOffset = offset;
-      }
-    }
-
-    return bestOffset;
-  }
-
-  /**
-   * Searches for Sync Word and decodes frames from bitstream.
-   */
-  public parsePacketsFromBits(bits: number[]): DecodedPacket[] {
+  public parsePacketsFromBitBuffer(): DecodedPacket[] {
     const packets: DecodedPacket[] = [];
     let i = 0;
 
-    while (i <= bits.length - 32) {
-      // Find sync word pattern 0xD391
-      let syncMatch = true;
+    while (i <= this.bitBuffer.length - 32) {
+      // Find sync word 0xD391 with up to 1-bit error tolerance
+      let diff = 0;
       for (let s = 0; s < 16; s++) {
-        if (bits[i + s] !== SYNC_BITS[s]) {
-          syncMatch = false;
-          break;
+        if (this.bitBuffer[i + s] !== SYNC_BITS[s]) {
+          diff++;
+          if (diff > 1) break;
         }
       }
 
-      if (!syncMatch) {
+      if (diff > 1) {
         i++;
         continue;
       }
 
-      // Found Sync Word at position i!
+      // Found potential sync word at index i!
       let cursor = i + 16;
       let fecCorrections = 0;
 
-      // 1. Decode Header (3 bytes: seq, len, flags)
-      // Each header byte is encoded with two 7-bit Hamming codewords (14 bits)
-      if (cursor + 3 * 14 > bits.length) {
-        break; // Not enough bits for header
+      // Check if header bits are available (3 bytes * 14 bits = 42 bits)
+      if (cursor + 42 > this.bitBuffer.length) {
+        // Wait for more incoming bits in next audio chunk
+        break;
       }
 
+      // Decode Header [seq, len, flags]
       const headerBytes: number[] = [];
+      let headerCorrupt = false;
       for (let b = 0; b < 3; b++) {
-        let highCode = 0;
-        for (let bit = 0; bit < 7; bit++) highCode = (highCode << 1) | bits[cursor++];
-        let lowCode = 0;
-        for (let bit = 0; bit < 7; bit++) lowCode = (lowCode << 1) | bits[cursor++];
-
-        const { byte, corrections } = Hamming74.decodeByte(highCode, lowCode);
-        headerBytes.push(byte);
-        fecCorrections += corrections;
+        let highCode = 0, lowCode = 0;
+        for (let bit = 0; bit < 7; bit++) highCode = (highCode << 1) | this.bitBuffer[cursor++];
+        for (let bit = 0; bit < 7; bit++) lowCode = (lowCode << 1) | this.bitBuffer[cursor++];
+        const res = Hamming74.decodeByte(highCode, lowCode);
+        headerBytes.push(res.byte);
+        fecCorrections += res.corrections;
       }
 
       const [seq, payloadLen, flags] = headerBytes;
       const useFEC = (flags & 0x01) === 0x01;
 
-      // Sanity check length
+      // Validate header sanity
       if (payloadLen > 128) {
-        // False positive sync word or corrupted length
+        // False positive sync word or corrupted length! Skip 1 bit and keep searching
         i++;
         continue;
       }
 
-      // 2. Decode Payload
-      const bitsNeededForPayload = useFEC ? payloadLen * 14 : payloadLen * 8;
-      const bitsNeededForCrc = 4 * 7; // CRC (2 bytes) = 4 codewords = 28 bits
+      const payloadBits = useFEC ? payloadLen * 14 : payloadLen * 8;
+      const crcBits = 28; // CRC 2 bytes encoded in 4 Hamming codewords = 28 bits
 
-      if (cursor + bitsNeededForPayload + bitsNeededForCrc > bits.length) {
-        break; // Incomplete packet in this chunk
+      // Check if full payload + CRC have arrived
+      if (cursor + payloadBits + crcBits > this.bitBuffer.length) {
+        // Frame still in flight; wait for the rest of the audio samples
+        break;
       }
 
+      // Decode Payload
       const payload = new Uint8Array(payloadLen);
       for (let p = 0; p < payloadLen; p++) {
         if (useFEC) {
-          let highCode = 0;
-          for (let bit = 0; bit < 7; bit++) highCode = (highCode << 1) | bits[cursor++];
-          let lowCode = 0;
-          for (let bit = 0; bit < 7; bit++) lowCode = (lowCode << 1) | bits[cursor++];
-
-          const { byte, corrections } = Hamming74.decodeByte(highCode, lowCode);
-          payload[p] = byte;
-          fecCorrections += corrections;
+          let highCode = 0, lowCode = 0;
+          for (let bit = 0; bit < 7; bit++) highCode = (highCode << 1) | this.bitBuffer[cursor++];
+          for (let bit = 0; bit < 7; bit++) lowCode = (lowCode << 1) | this.bitBuffer[cursor++];
+          const res = Hamming74.decodeByte(highCode, lowCode);
+          payload[p] = res.byte;
+          fecCorrections += res.corrections;
         } else {
           let rawByte = 0;
-          for (let bit = 0; bit < 8; bit++) rawByte = (rawByte << 1) | bits[cursor++];
+          for (let bit = 0; bit < 8; bit++) rawByte = (rawByte << 1) | this.bitBuffer[cursor++];
           payload[p] = rawByte;
         }
       }
 
-      // 3. Decode CRC-16
+      // Decode CRC-16
       const crcCodewords: number[] = [];
       for (let c = 0; c < 4; c++) {
         let code = 0;
-        for (let bit = 0; bit < 7; bit++) code = (code << 1) | bits[cursor++];
+        for (let bit = 0; bit < 7; bit++) code = (code << 1) | this.bitBuffer[cursor++];
         crcCodewords.push(code);
       }
       const crcHighRes = Hamming74.decodeByte(crcCodewords[0], crcCodewords[1]);
@@ -548,7 +580,7 @@ export class FSKDemodulator {
       fecCorrections += crcHighRes.corrections + crcLowRes.corrections;
       const receivedCrc = ((crcHighRes.byte & 0xff) << 8) | (crcLowRes.byte & 0xff);
 
-      // 4. Verify Checksum
+      // Verify Checksum
       const dataForCrc = new Uint8Array(3 + payload.length);
       dataForCrc[0] = seq;
       dataForCrc[1] = payloadLen;
@@ -556,9 +588,8 @@ export class FSKDemodulator {
       dataForCrc.set(payload, 3);
       const expectedCrc = CRC16.compute(dataForCrc);
 
-      const crcValid = receivedCrc === expectedCrc;
+      const crcValid = (receivedCrc === expectedCrc);
 
-      // Decode payload to string if UTF-8
       let text: string | undefined;
       try {
         text = new TextDecoder('utf-8', { fatal: false }).decode(payload);
@@ -577,8 +608,13 @@ export class FSKDemodulator {
         timestamp: Date.now(),
       });
 
-      // Advance search cursor past this packet
+      // Advance search cursor past this decoded packet
       i = cursor;
+    }
+
+    // Prune consumed bits from the front of the bit buffer
+    if (i > 0) {
+      this.bitBuffer.splice(0, i);
     }
 
     return packets;

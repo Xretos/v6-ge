@@ -293,7 +293,7 @@
       return crc & 0xffff;
     }
 
-    const PREAMBLE_BITS = [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0];
+    const PREAMBLE_BITS = [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0];
     const SYNC_BITS = [1,1,0,1,0,0,1,1,1,0,0,1,0,0,0,1]; // 0xD391
 
     function getAudioContext() {

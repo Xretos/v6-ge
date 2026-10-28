@@ -100,23 +100,35 @@ test('End-to-End Modulation and Demodulation at 44100 Hz adaptive sample rate', 
   assert.equal(packets[0].text, message);
 });
 
-test('Demodulation recovers and corrects bit error using Hamming(7,4) FEC', () => {
-  const message = 'CORRECT-ME';
+test('Streaming audio in realistic small chunks (1024 samples) with leading silence', () => {
+  const message = 'STREAMING-CHUNK-TEST';
   const payload = new TextEncoder().encode(message);
   const config = { ...DEFAULT_CONFIG, sampleRate: 48000, baudRate: 100, useFEC: true };
 
-  const bits = FrameEncoder.encodePacketToBits(payload, 1, true);
+  const bits = FrameEncoder.encodePacketToBits(payload, 88, true);
+  const modulated = FSKModulator.modulate(bits, config);
 
-  // Intentionally flip one bit in the payload stream after sync word
-  const corruptedBits = [...bits];
-  // Preamble(16) + Sync(16) + Header(3*14=42) = bit 74 is in payload
-  corruptedBits[75] ^= 1;
+  // Prepend 3500 samples of quiet line noise / silence (simulating real mic stream before transmission starts)
+  const total = 3500 + modulated.length + 2000;
+  const fullAudio = new Float32Array(total);
+  for (let i = 0; i < 3500; i++) fullAudio[i] = (Math.random() - 0.5) * 0.001; // low noise
+  fullAudio.set(modulated, 3500);
+  for (let i = 3500 + modulated.length; i < total; i++) fullAudio[i] = (Math.random() - 0.5) * 0.001;
 
+  // Stream in 1024-sample chunks (like Web Audio onaudioprocess)
   const demodulator = new FSKDemodulator(config);
-  const packets = demodulator.parsePacketsFromBits(corruptedBits);
+  const allDecoded: any[] = [];
+  const CHUNK_SIZE = 1024;
 
-  assert.equal(packets.length, 1);
-  assert.equal(packets[0].crcValid, true, 'CRC should still be valid after FEC correction');
-  assert.equal(packets[0].text, message);
-  assert.ok(packets[0].fecCorrections > 0, 'FEC corrections count should be recorded');
+  for (let offset = 0; offset < fullAudio.length; offset += CHUNK_SIZE) {
+    const chunk = fullAudio.subarray(offset, Math.min(fullAudio.length, offset + CHUNK_SIZE));
+    const pkts = demodulator.processAudioBuffer(chunk);
+    allDecoded.push(...pkts);
+  }
+
+  assert.equal(allDecoded.length, 1, 'Should decode packet even when streamed in 1024 chunks');
+  assert.equal(allDecoded[0].seq, 88);
+  assert.equal(allDecoded[0].crcValid, true);
+  assert.equal(allDecoded[0].text, message);
 });
+

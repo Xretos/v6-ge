@@ -408,13 +408,18 @@
         scriptProcessor.connect(muteGain);
         muteGain.connect(audioCtx.destination);
 
+        activeDemodulator = new StreamingDemodulator(
+          audioCtx.sampleRate,
+          parseInt(document.getElementById('rxBaudRate').value),
+          1200,
+          2200
+        );
+
         scriptProcessor.onaudioprocess = (e) => {
           const inputData = e.inputBuffer.getChannelData(0);
-          for (let i = 0; i < inputData.length; i++) {
-            audioSampleBuffer[bufferWriteIdx] = inputData[i];
-            bufferWriteIdx = (bufferWriteIdx + 1) % BUFFER_SIZE;
+          if (activeDemodulator) {
+            activeDemodulator.pushSamples(inputData);
           }
-          totalSamplesPushed += inputData.length;
         };
 
         isListening = true;
@@ -424,7 +429,6 @@
         document.getElementById('rxStatus').style.color = '#10b981';
 
         requestAnimationFrame(renderLoop);
-        startDemodulatorWorker();
       } catch (err) {
         alert('无法启动音频输入: ' + (err.message || err));
       }
@@ -498,187 +502,248 @@
       requestAnimationFrame(renderLoop);
     }
 
-    // 流式 FSK 解调定时器
-    function startDemodulatorWorker() {
-      const timer = setInterval(() => {
-        if (!isListening || !audioCtx) {
-          clearInterval(timer);
-          return;
-        }
+    // ========================================================================
+    // 连续流式 FSK 解调器 (带 DPLL 符号时钟恢复、自适应均衡与容错同步字)
+    // ========================================================================
+    class StreamingDemodulator {
+      constructor(sampleRate, baudRate, markFreq, spaceFreq) {
+        this.sampleRate = sampleRate;
+        this.baudRate = baudRate;
+        this.markFreq = markFreq;
+        this.spaceFreq = spaceFreq;
+        this.N = Math.round(sampleRate / baudRate);
+        this.S = Math.max(1, Math.floor(this.N / 8)); // 8x 过采样步长
 
-        const sampleRate = audioCtx.sampleRate;
-        const baudRate = parseInt(document.getElementById('rxBaudRate').value);
-        const samplesPerSymbol = Math.round(sampleRate / baudRate);
-        const markFreq = 1200;
-        const spaceFreq = 2200;
-
-        const available = totalSamplesPushed - lastProcessedIdx;
-        if (available < samplesPerSymbol * 4) return;
-
-        // 批量提取未处理的音频进行解调
-        const processCount = Math.min(available, 4096);
-        const chunk = new Float32Array(processCount);
-        for (let i = 0; i < processCount; i++) {
-          const readPos = (lastProcessedIdx + i) % BUFFER_SIZE;
-          chunk[i] = audioSampleBuffer[readPos];
-        }
-        lastProcessedIdx += processCount;
-
-        // 正交匹配滤波解调
-        demodulateChunk(chunk, sampleRate, baudRate, markFreq, spaceFreq);
-      }, 50);
-    }
-
-    function demodulateChunk(chunk, sampleRate, baudRate, markFreq, spaceFreq) {
-      const N = Math.round(sampleRate / baudRate);
-      const twoPi = 2 * Math.PI;
-
-      let avgSnr = 0;
-      let count = 0;
-
-      for (let offset = 0; offset + N <= chunk.length; offset += N) {
-        let markI = 0, markQ = 0, spaceI = 0, spaceQ = 0;
-        for (let n = 0; n < N; n++) {
-          const val = chunk[offset + n];
+        this.markCosTable = new Float32Array(this.N);
+        this.markSinTable = new Float32Array(this.N);
+        this.spaceCosTable = new Float32Array(this.N);
+        this.spaceSinTable = new Float32Array(this.N);
+        for (let n = 0; n < this.N; n++) {
           const t = n / sampleRate;
-          markI += val * Math.cos(twoPi * markFreq * t);
-          markQ += val * Math.sin(twoPi * markFreq * t);
-          spaceI += val * Math.cos(twoPi * spaceFreq * t);
-          spaceQ += val * Math.sin(twoPi * spaceFreq * t);
+          this.markCosTable[n] = Math.cos(2 * Math.PI * markFreq * t);
+          this.markSinTable[n] = Math.sin(2 * Math.PI * markFreq * t);
+          this.spaceCosTable[n] = Math.cos(2 * Math.PI * spaceFreq * t);
+          this.spaceSinTable[n] = Math.sin(2 * Math.PI * spaceFreq * t);
         }
 
-        const markEnergy = (markI * markI + markQ * markQ) / (N * N);
-        const spaceEnergy = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
-
-        if (markEnergy + spaceEnergy < 0.0001) continue; // 忽略静音
-
-        const bit = markEnergy >= spaceEnergy ? 1 : 0;
-        streamBitBuffer.push(bit);
-
-        const highE = Math.max(markEnergy, spaceEnergy);
-        const lowE = Math.min(markEnergy, spaceEnergy) + 1e-9;
-        avgSnr += 10 * Math.log10(highE / lowE);
-        count++;
+        this.sampleBuffer = [];
+        this.bitBuffer = [];
+        this.clockPhase = 0;
+        this.lastDiscriminator = 0;
+        this.maxMarkEnergy = 0.001;
+        this.maxSpaceEnergy = 0.001;
       }
 
-      if (count > 0) {
-        const snr = (avgSnr / count).toFixed(1);
-        document.getElementById('snrBadge').textContent = 'SNR: ' + snr + ' dB';
+      reset() {
+        this.sampleBuffer = [];
+        this.bitBuffer = [];
+        this.clockPhase = 0;
+        this.lastDiscriminator = 0;
       }
 
-      // 限制位缓冲大小
-      if (streamBitBuffer.length > 2000) {
-        streamBitBuffer = streamBitBuffer.slice(-1000);
+      pushSamples(inputData) {
+        for (let i = 0; i < inputData.length; i++) {
+          this.sampleBuffer.push(inputData[i]);
+        }
+
+        const N = this.N;
+        const S = this.S;
+
+        let snrSum = 0;
+        let snrCount = 0;
+
+        while (this.sampleBuffer.length >= N + S) {
+          let markI = 0, markQ = 0;
+          let spaceI = 0, spaceQ = 0;
+          let sumSq = 0;
+
+          for (let n = 0; n < N; n++) {
+            const s = this.sampleBuffer[n];
+            sumSq += s * s;
+            markI += s * this.markCosTable[n];
+            markQ += s * this.markSinTable[n];
+            spaceI += s * this.spaceCosTable[n];
+            spaceQ += s * this.spaceSinTable[n];
+          }
+
+          const rms = Math.sqrt(sumSq / N);
+          const markE = (markI * markI + markQ * markQ) / (N * N);
+          const spaceE = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
+
+          if (rms < 0.004 || (markE + spaceE) < 1e-7) {
+            this.maxMarkEnergy = Math.max(0.001, this.maxMarkEnergy * 0.99);
+            this.maxSpaceEnergy = Math.max(0.001, this.maxSpaceEnergy * 0.99);
+            this.sampleBuffer.splice(0, S);
+            this.clockPhase = 0;
+            continue;
+          }
+
+          // 自适应均衡：手机麦克风对 2200Hz 衰减大于 1200Hz，自动补偿能量差异
+          this.maxMarkEnergy = Math.max(markE, this.maxMarkEnergy * 0.998);
+          this.maxSpaceEnergy = Math.max(spaceE, this.maxSpaceEnergy * 0.998);
+
+          const normMarkE = markE / Math.max(1e-6, this.maxMarkEnergy);
+          const normSpaceE = spaceE / Math.max(1e-6, this.maxSpaceEnergy);
+
+          const discriminator = normMarkE - normSpaceE;
+
+          const higherE = Math.max(normMarkE, normSpaceE);
+          const lowerE = Math.min(normMarkE, normSpaceE) + 1e-6;
+          snrSum += Math.min(45, Math.max(0, 10 * Math.log10(higherE / lowerE)));
+          snrCount++;
+
+          // DPLL 锁相环：检测符号跳变过零点
+          if (this.lastDiscriminator * discriminator < 0) {
+            let phaseError = this.clockPhase;
+            if (phaseError > N / 2) phaseError -= N;
+            this.clockPhase -= Math.round(phaseError * 0.35);
+          }
+          this.lastDiscriminator = discriminator;
+
+          const prevClock = this.clockPhase;
+          this.clockPhase += S;
+
+          // 在符号中心点（眼图张开度最大位置）采样比特
+          if (prevClock < N / 2 && this.clockPhase >= N / 2) {
+            this.bitBuffer.push(discriminator >= 0 ? 1 : 0);
+            if (this.bitBuffer.length > 2500) {
+              this.bitBuffer.splice(0, 1000);
+            }
+          }
+
+          if (this.clockPhase >= N) {
+            this.clockPhase -= N;
+          }
+
+          this.sampleBuffer.splice(0, S);
+        }
+
+        if (snrCount > 0) {
+          const snr = Math.round(snrSum / snrCount);
+          document.getElementById('snrBadge').textContent = 'SNR: ' + snr + ' dB';
+        }
+
+        this.parsePackets();
       }
 
-      // 尝试解析帧
-      parseFrames();
-    }
+      parsePackets() {
+        let i = 0;
+        while (i <= this.bitBuffer.length - 32) {
+          // 容错同步字匹配（允许 1 位错码）
+          let diff = 0;
+          for (let s = 0; s < 16; s++) {
+            if (this.bitBuffer[i + s] !== SYNC_BITS[s]) {
+              diff++;
+              if (diff > 1) break;
+            }
+          }
+          if (diff > 1) {
+            i++;
+            continue;
+          }
 
-    function parseFrames() {
-      let i = 0;
-      while (i <= streamBitBuffer.length - 32) {
-        // 查找同步字 0xD391
-        let match = true;
-        for (let s = 0; s < 16; s++) {
-          if (streamBitBuffer[i + s] !== SYNC_BITS[s]) {
-            match = false;
+          let cursor = i + 16;
+          let fecCorrections = 0;
+
+          // 帧头 3 字节 = 42 bits
+          if (cursor + 42 > this.bitBuffer.length) break;
+
+          const headerBytes = [];
+          for (let b = 0; b < 3; b++) {
+            let hCode = 0, lCode = 0;
+            for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | this.bitBuffer[cursor++];
+            for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | this.bitBuffer[cursor++];
+            const res = hammingDecodeByte(hCode, lCode);
+            headerBytes.push(res.byte);
+            fecCorrections += res.corrections;
+          }
+
+          const [seq, payloadLen, flags] = headerBytes;
+          const useFEC = (flags & 0x01) === 0x01;
+
+          if (payloadLen > 128) {
+            i++;
+            continue;
+          }
+
+          const payloadBits = useFEC ? payloadLen * 14 : payloadLen * 8;
+          const crcBits = 28;
+
+          if (cursor + payloadBits + crcBits > this.bitBuffer.length) {
+            // 等待后续音频样本填充完整报文
             break;
           }
-        }
-        if (!match) {
-          i++;
-          continue;
-        }
 
-        let cursor = i + 16;
-        let fecCorrectionsInPacket = 0;
-
-        // 帧头 (3 字节 = 42 bits)
-        if (cursor + 42 > streamBitBuffer.length) break;
-
-        const headerBytes = [];
-        for (let b = 0; b < 3; b++) {
-          let hCode = 0, lCode = 0;
-          for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | streamBitBuffer[cursor++];
-          for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | streamBitBuffer[cursor++];
-          const res = hammingDecodeByte(hCode, lCode);
-          headerBytes.push(res.byte);
-          fecCorrectionsInPacket += res.corrections;
-        }
-
-        const [seq, payloadLen, flags] = headerBytes;
-        const useFEC = (flags & 0x01) === 0x01;
-
-        if (payloadLen > 128) { i++; continue; }
-
-        const payloadBits = useFEC ? payloadLen * 14 : payloadLen * 8;
-        const crcBits = 28; // CRC 2 字节 = 4 个 7-bit 码字
-
-        if (cursor + payloadBits + crcBits > streamBitBuffer.length) break;
-
-        const payload = new Uint8Array(payloadLen);
-        for (let p = 0; p < payloadLen; p++) {
-          if (useFEC) {
-            let hCode = 0, lCode = 0;
-            for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | streamBitBuffer[cursor++];
-            for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | streamBitBuffer[cursor++];
-            const res = hammingDecodeByte(hCode, lCode);
-            payload[p] = res.byte;
-            fecCorrectionsInPacket += res.corrections;
-          } else {
-            let b = 0;
-            for (let bit = 0; bit < 8; bit++) b = (b << 1) | streamBitBuffer[cursor++];
-            payload[p] = b;
+          // 解码 Payload
+          const payload = new Uint8Array(payloadLen);
+          for (let p = 0; p < payloadLen; p++) {
+            if (useFEC) {
+              let hCode = 0, lCode = 0;
+              for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | this.bitBuffer[cursor++];
+              for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | this.bitBuffer[cursor++];
+              const res = hammingDecodeByte(hCode, lCode);
+              payload[p] = res.byte;
+              fecCorrections += res.corrections;
+            } else {
+              let b = 0;
+              for (let bit = 0; bit < 8; bit++) b = (b << 1) | this.bitBuffer[cursor++];
+              payload[p] = b;
+            }
           }
+
+          // 解码 CRC
+          const crcCodes = [];
+          for (let c = 0; c < 4; c++) {
+            let code = 0;
+            for (let bit = 0; bit < 7; bit++) code = (code << 1) | this.bitBuffer[cursor++];
+            crcCodes.push(code);
+          }
+          const crcH = hammingDecodeByte(crcCodes[0], crcCodes[1]);
+          const crcL = hammingDecodeByte(crcCodes[2], crcCodes[3]);
+          fecCorrections += crcH.corrections + crcL.corrections;
+          const receivedCrc = ((crcH.byte & 0xff) << 8) | (crcL.byte & 0xff);
+
+          // 校验 CRC
+          const checkData = new Uint8Array(3 + payload.length);
+          checkData[0] = seq; checkData[1] = payloadLen; checkData[2] = flags;
+          checkData.set(payload, 3);
+          const expectedCrc = computeCrc16(checkData);
+
+          const isValid = (receivedCrc === expectedCrc);
+
+          let decodedText = '';
+          try {
+            decodedText = new TextDecoder('utf-8').decode(payload);
+          } catch(e) {
+            decodedText = '[非UTF-8二进制数据]';
+          }
+
+          if (isValid) {
+            validCount++;
+          } else {
+            errorCount++;
+          }
+          totalFecCorrections += fecCorrections;
+
+          updateStats();
+          appendMessage(seq, decodedText, isValid, fecCorrections);
+
+          i = cursor;
         }
 
-        // CRC
-        const crcCodes = [];
-        for (let c = 0; c < 4; c++) {
-          let code = 0;
-          for (let bit = 0; bit < 7; bit++) code = (code << 1) | streamBitBuffer[cursor++];
-          crcCodes.push(code);
+        if (i > 0) {
+          this.bitBuffer.splice(0, i);
         }
-        const crcH = hammingDecodeByte(crcCodes[0], crcCodes[1]);
-        const crcL = hammingDecodeByte(crcCodes[2], crcCodes[3]);
-        fecCorrectionsInPacket += crcH.corrections + crcL.corrections;
-        const receivedCrc = ((crcH.byte & 0xff) << 8) | (crcL.byte & 0xff);
-
-        // 验证 CRC
-        const checkData = new Uint8Array(3 + payload.length);
-        checkData[0] = seq; checkData[1] = payloadLen; checkData[2] = flags;
-        checkData.set(payload, 3);
-        const expectedCrc = computeCrc16(checkData);
-
-        const isValid = (receivedCrc === expectedCrc);
-
-        let decodedText = '';
-        try {
-          decodedText = new TextDecoder('utf-8').decode(payload);
-        } catch(e) {
-          decodedText = '[非UTF-8二进制数据]';
-        }
-
-        // 记录统计
-        if (isValid) {
-          validCount++;
-        } else {
-          errorCount++;
-        }
-        totalFecCorrections += fecCorrectionsInPacket;
-
-        updateStats();
-        appendMessage(seq, decodedText, isValid, fecCorrectionsInPacket);
-
-        // 移过本包
-        i = cursor;
-      }
-
-      if (i > 0) {
-        streamBitBuffer = streamBitBuffer.slice(i);
       }
     }
+
+    let activeDemodulator = null;
+
+    document.getElementById('rxBaudRate').addEventListener('change', () => {
+      if (audioCtx && isListening) {
+        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, parseInt(document.getElementById('rxBaudRate').value), 1200, 2200);
+      }
+    });
 
     function updateStats() {
       document.getElementById('statValid').textContent = validCount;
