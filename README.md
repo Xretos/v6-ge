@@ -1,11 +1,74 @@
-<div align="center">
+# AudioJack FSK Modem (3.5mm 音频孔调制解调器)
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+> 基于 Web Audio API 与连续相位频率偏移键控 (CPFSK) 的安卓手机 3.5mm 耳机孔模拟音频双机通信系统。提供纯原生单文件发送端 (`sender.html`)、接收端 (`receiver.html`)、Hamming(7,4) 前向纠错、实时时域/频域示波器监控与 GitHub Pages 部署方案。
 
-  <h1>Built with AI Studio</h2>
+---
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## 🌟 核心特性
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+1. **传输速率与调制方式**：
+   - 调制模式：连续相位移频键控 (CPFSK / Continuous-Phase FSK)，杜绝相位突变引起的频谱旁瓣泄漏。
+   - 频点配置：Mark (位 1) = 1200 Hz, Space (位 0) = 2200 Hz（兼容 Bell 202 标准及所有手机麦克风 300Hz~3400Hz 语音通带）。
+   - 速率支持：支持 100 bps、150 bps、200 bps 与 300 bps，默认 100 bps（满足超强抗噪与零丢包要求）。
+2. **前向纠错 (FEC) 与数据校验**：
+   - **Hamming(7,4) 线性分组码**：将每个半字节 (4 bits) 编码为 7-bit 码字，接收端依据校验伴随式 $S = (s_3 s_2 s_1)_2$ 准确定位并自动纠正任意 1 位传输错码。
+   - **CRC-16-CCITT 校验码**：多项式 $x^{16} + x^{12} + x^5 + 1$ ($0x1021$)，多层防护检测未纠正错误，检出率高达 99.998%。
+3. **实时信号质量监测**：
+   - **时域示波器**：实时绘制麦克风输入的模拟音频波形。
+   - **频域 FFT 频谱仪**：实时显示 1200Hz 与 2200Hz 能量柱状图与信噪比 (SNR dB)。
+   - **电平表与防削顶检测**：实时监测输入 RMS 电平，若电平超过 -1 dBFS 即触发 `CLIP` 削顶失真红色预警。
+   - **丢包与纠错统计**：实时统计有效帧数、CRC 失败帧数、丢包率 (%) 及 FEC 纠错总次数。
+4. **采样率自适应优化**：
+   - 自动检测并适配 Android 设备的底层音频采样率（44.1 kHz, 48 kHz, 96 kHz）。
+   - 预计算正交三角函数表（Zero-GC），无垃圾回收停顿。
+   - 1/4 符号相位早迟对齐跟踪，消除跨机晶振 PPM 偏差。
+5. **两种使用方式**：
+   - **工作台交互应用**：包含发送端、接收端、单机回环抗噪测试器、硬件指南与协议基准报告。
+   - **独立离线 HTML 网页**：`public/sender.html` 和 `public/receiver.html` 为 100% 独立单文件，无需 Node.js 或构建工具，直接双击或丢在 GitHub Pages 即可运行。
 
-</div>
+---
+
+## 🔌 硬件连接与接线规范 (CRITICAL)
+
+### 1. 3.5mm TRRS 4段耳机孔引脚定义 (CTIA / 美标)
+现代绝大多数安卓手机均采用 CTIA 标准：
+- **Tip (尖端)**: 左声道输出 (DAC Out)
+- **Ring 1 (中环1)**: 右声道输出 (DAC Out)
+- **Ring 2 (中环2)**: 模拟地 (GND)
+- **Sleeve (根部)**: 麦克风输入 (ADC In)
+
+### 2. 避免普通对录线陷阱
+> ⚠️ **注意**：市面上普通的 3.5mm 3节 (TRS) 双公头对录线插在两部手机之间，会将“手机A音频输出”接在“手机B音频输出”上，导致麦克风无法输入任何信号！
+
+**推荐解决方案：**
+- **方案 A (最简推荐)**：手机 B 耳机孔插入一条市售的 **3.5mm 一分二 TRRS 耳机/麦克风分离器**（外壳带耳机与麦克风图标）。使用普通 3.5mm 对录线，一头插入手机 A 耳机孔，另一头插入手机 B 分线器的 **麦克风孔**。
+- **方案 B (自制交叉线)**：
+  - 手机 A Tip (左声道输出) ──&gt; 手机 B Sleeve (麦克风输入)
+  - 手机 A Ring 2 (GND 地线) ──&gt; 手机 B Ring 2 (GND 地线)
+
+### 3. 电平匹配与防削顶 (Attenuator)
+手机耳机孔输出为 Line/Headphone 级别（约 0.5V ~ 1.0V RMS），而麦克风灵敏度仅 10mV ~ 50mV。
+- **软件衰减 (免焊锡)**：将发送端手机系统音量置于 50%~70%，发送端页面音量滑块置于 70%，接收端输入保持在 -18 dBFS ~ -10 dBFS 之间。
+- **硬件分压电阻 (高保真)**：在信号线与地之间制作一个 10kΩ : 1kΩ 的电阻分压网络，获得 20dB 纯净线性衰减。
+
+---
+
+## 🚀 GitHub Pages 部署说明
+
+1. 创建 GitHub 公开仓库（例如 `audiojack-fsk`）。
+2. 将 `public/sender.html` 和 `public/receiver.html` 提交到仓库 `main` 分支根目录下。
+3. 进入仓库 **Settings -&gt; Pages**，Source 选择 **Deploy from a branch**，分支选择 `main` / `root` 并保存。
+4. 部署完成后，在两台安卓手机分别访问：
+   - 手机 A 发送端：`https://<你的用户名>.github.io/audiojack-fsk/sender.html`
+   - 手机 B 接收端：`https://<你的用户名>.github.io/audiojack-fsk/receiver.html`
+   *(注：Web Audio 的 getUserMedia 麦克风调用强制要求 HTTPS 环境，GitHub Pages 原生自带 HTTPS)*
+
+---
+
+## 🛠️ 音频链路 5 步快速调试步骤
+
+1. **物理对插**：将对录线连接至发送端耳机口与接收端麦克风输入口。
+2. **授权录音**：在接收端点击“启动监听”，在浏览器弹窗中点击“允许使用麦克风”。
+3. **输出校准纯音**：在发送端点击“1200Hz 校准音”，调节发送端音量，直到接收端 RMS 电平显示约 -15 dBFS。
+4. **观察频域尖峰**：确认接收端频谱图在 1200Hz 处凸显单峰，无任何红色“CLIP”削顶告警。
+5. **点对点通信**：发送端输入文本并点击“发送”，接收端在 1 秒内完成正交相关解调，显示绿色校验通过与纠错明细。

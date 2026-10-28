@@ -1,0 +1,6 @@
+{
+  "name": "AudioJack FSK Modem - 3.5mm音频孔调制解调器",
+  "description": "基于Web Audio API与FSK移频键控的3.5mm耳机孔模拟音频双机通信系统，提供发送端、接收端、FEC前向纠错、实时波形示波器与GitHub Pages独立部署版本。",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

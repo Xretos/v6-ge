@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>3.5mm 音频数据接收端 (FSK Receiver) - AudioJack Modem</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1f293d;
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --primary: #06b6d4;
+      --text: #f3f4f6;
+      --text-dim: #9ca3af;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      padding: 16px;
+      line-height: 1.5;
+    }
+    .container { max-width: 640px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    h1 { font-size: 1.25rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #e5e7eb;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--text-dim); margin-bottom: 4px; }
+    select, input[type="range"] { width: 100%; }
+    select {
+      background: #0d131f;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px 12px;
+      font-size: 0.95rem;
+      outline: none;
+    }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .btn {
+      width: 100%;
+      background: var(--accent);
+      color: #000;
+      font-weight: 700;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn:hover { filter: brightness(1.1); box-shadow: 0 0 16px var(--accent-glow); }
+    .btn:active { transform: scale(0.98); }
+    .btn-stop { background: var(--danger); color: #fff; }
+    .btn-secondary {
+      background: #1f2937;
+      color: #e5e7eb;
+      font-weight: 500;
+      font-size: 0.8rem;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+    }
+    canvas {
+      width: 100%;
+      height: 100px;
+      background: #070a12;
+      border-radius: 8px;
+      border: 1px solid #1a2234;
+      display: block;
+      margin-bottom: 8px;
+    }
+    .meter-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #1e293b;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 4px 0 10px;
+    }
+    .meter-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #10b981, #06b6d4, #f59e0b, #ef4444);
+      transition: width 0.1s linear;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .stat-box {
+      background: #0a0f1d;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+    .stat-label { font-size: 0.7rem; color: var(--text-dim); }
+    .stat-num { font-size: 1.1rem; font-weight: 700; color: #38bdf8; font-family: monospace; }
+    .msg-list {
+      max-height: 220px;
+      overflow-y: auto;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      background: #070a12;
+      padding: 8px;
+    }
+    .msg-item {
+      padding: 8px;
+      border-bottom: 1px solid #1f2937;
+      font-size: 0.85rem;
+    }
+    .msg-item:last-child { border-bottom: none; }
+    .msg-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .msg-text {
+      font-family: monospace;
+      color: #f3f4f6;
+      word-break: break-all;
+      background: #0f172a;
+      padding: 6px 8px;
+      border-radius: 4px;
+      border-left: 3px solid var(--accent);
+    }
+    .msg-text.corrupted { border-left-color: var(--danger); color: #fca5a5; }
+    .nav-links {
+      display: flex;
+      justify-content: space-around;
+      margin-top: 16px;
+      font-size: 0.85rem;
+    }
+    .nav-links a { color: var(--primary); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>📥 3.5mm 音频数据接收端</h1>
+        <p style="font-size: 0.8rem; color: var(--text-dim);">实时麦克风音频采集与 FSK 信号解调器</p>
+      </div>
+      <span class="badge" id="srBadge">Fs: 未初始化</span>
+    </header>
+
+    <!-- 麦克风采集与控制 -->
+    <div class="card">
+      <div class="card-title">
+        <span>🎙️ 硬件音频采集控制</span>
+        <span id="rxStatus" style="font-size: 0.75rem; color: var(--text-dim);">停止中</span>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <label>期望解调波特率</label>
+          <select id="rxBaudRate">
+            <option value="100" selected>100 bps (标准)</option>
+            <option value="150">150 bps</option>
+            <option value="200">200 bps</option>
+            <option value="300">300 bps</option>
+          </select>
+        </div>
+        <div>
+          <label>前向纠错 (FEC) 模式</label>
+          <select id="rxFec">
+            <option value="auto" selected>自动检测帧头 Flag</option>
+            <option value="hamming">强制使能 Hamming(7,4)</option>
+            <option value="none">关闭 FEC 纠错</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn" id="btnToggleListen">
+        <span>▶ 启动耳机孔音频接收监听</span>
+      </button>
+
+      <p style="font-size: 0.72rem; color: var(--text-dim); margin-top: 8px;">
+        ⚠️ 权限说明：系统将请求麦克风权限。请使用 3.5mm 对录线或 TRRS 分线器插入手机耳机孔，并禁用回声消除以获得未受压缩的纯净信号。
+      </p>
+    </div>
+
+    <!-- 信号质量与可视化监测 -->
+    <div class="card">
+      <div class="card-title">
+        <span>📈 实时示波器与频谱监控</span>
+        <span id="snrBadge" style="font-size: 0.75rem; color: #38bdf8; font-family: monospace;">SNR: -- dB</span>
+      </div>
+
+      <label>时域波形 (Oscilloscope)</label>
+      <canvas id="rxWaveCanvas"></canvas>
+
+      <label>频域 FFT 能量分布 (1200Hz Mark / 2200Hz Space)</label>
+      <canvas id="rxSpecCanvas"></canvas>
+
+      <div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
+          <span>输入音频电平 (Peak RMS)</span>
+          <span id="rmsDbVal" style="font-family: monospace;">-∞ dBFS</span>
+        </div>
+        <div class="meter-bar-bg">
+          <div class="meter-bar-fill" id="rmsFill"></div>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-label">有效数据包</div>
+          <div class="stat-num" id="statValid" style="color: #10b981;">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">FEC 纠错数</div>
+          <div class="stat-num" id="statCorrected" style="color: #38bdf8;">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">CRC 丢包率</div>
+          <div class="stat-num" id="statLossRate" style="color: #f59e0b;">0.0%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 接收数据列表 -->
+    <div class="card">
+      <div class="card-title">
+        <span>📜 接收报文记录 (实时解码)</span>
+        <button class="btn-secondary" id="btnClearLog">清空记录</button>
+      </div>
+
+      <div class="msg-list" id="msgList">
+        <div style="color: var(--text-dim); font-size: 0.8rem; text-align: center; padding: 24px 0;">
+          等待接收 3.5mm 音频信号... 请在发送端点击“发送”
+        </div>
+      </div>
+    </div>
+
+    <div class="nav-links">
+      <a href="sender.html">👉 切换到发送端网页 (sender.html)</a>
+      <a href="./">📖 返回系统主控制台与文档</a>
+    </div>
+  </div>
+
+  <script>
+    // ========================================================================
+    // 纯客户端 JavaScript FSK 解调与纠错引擎
+    // ========================================================================
+    let audioCtx = null;
+    let micStream = null;
+    let isListening = false;
+    let analyserNode = null;
+    let scriptProcessor = null;
+
+    let validCount = 0;
+    let errorCount = 0;
+    let totalFecCorrections = 0;
+
+    // Hamming(7,4) 解码与单比特纠错
+    function hammingDecodeNibble(codeword) {
+      let bits = codeword & 0x7f;
+      const r1 = (bits >> 6) & 1, r2 = (bits >> 5) & 1, r3 = (bits >> 4) & 1,
+            r4 = (bits >> 3) & 1, r5 = (bits >> 2) & 1, r6 = (bits >> 1) & 1, r7 = bits & 1;
+
+      const s1 = r1 ^ r3 ^ r5 ^ r7;
+      const s2 = r2 ^ r3 ^ r6 ^ r7;
+      const s3 = r4 ^ r5 ^ r6 ^ r7;
+      const syndrome = (s3 << 2) | (s2 << 1) | s1;
+
+      let corrected = false;
+      if (syndrome > 0 && syndrome <= 7) {
+        bits ^= (1 << (7 - syndrome));
+        corrected = true;
+      }
+
+      const d1 = (bits >> 4) & 1, d2 = (bits >> 2) & 1, d3 = (bits >> 1) & 1, d4 = bits & 1;
+      return { nibble: (d1 << 3) | (d2 << 2) | (d3 << 1) | d4, corrected };
+    }
+
+    function hammingDecodeByte(hCode, lCode) {
+      const h = hammingDecodeNibble(hCode);
+      const l = hammingDecodeNibble(lCode);
+      return {
+        byte: (h.nibble << 4) | l.nibble,
+        corrections: (h.corrected ? 1 : 0) + (l.corrected ? 1 : 0)
+      };
+    }
+
+    function computeCrc16(data) {
+      let crc = 0xffff;
+      for (let i = 0; i < data.length; i++) {
+        crc ^= data[i] << 8;
+        for (let bit = 0; bit < 8; bit++) {
+          crc = (crc & 0x8000) ? (((crc << 1) ^ 0x1021) & 0xffff) : ((crc << 1) & 0xffff);
+        }
+      }
+      return crc & 0xffff;
+    }
+
+    const SYNC_BITS = [1,1,0,1,0,0,1,1,1,0,0,1,0,0,0,1]; // 0xD391
+
+    // 绘制示波器与频谱
+    const waveCanvas = document.getElementById('rxWaveCanvas');
+    const waveCtx = waveCanvas.getContext('2d');
+    const specCanvas = document.getElementById('rxSpecCanvas');
+    const specCtx = specCanvas.getContext('2d');
+
+    function resizeCanvases() {
+      waveCanvas.width = waveCanvas.clientWidth * window.devicePixelRatio;
+      waveCanvas.height = waveCanvas.clientHeight * window.devicePixelRatio;
+      specCanvas.width = specCanvas.clientWidth * window.devicePixelRatio;
+      specCanvas.height = specCanvas.clientHeight * window.devicePixelRatio;
+    }
+    window.addEventListener('resize', resizeCanvases);
+    resizeCanvases();
+
+    // 环形样本缓冲用于解调
+    const BUFFER_SIZE = 48000; // 1秒缓冲
+    const audioSampleBuffer = new Float32Array(BUFFER_SIZE);
+    let bufferWriteIdx = 0;
+    let totalSamplesPushed = 0;
+    let lastProcessedIdx = 0;
+
+    // 滑动比特缓冲
+    let streamBitBuffer = [];
+
+    // 启动/停止监听
+    const btnToggle = document.getElementById('btnToggleListen');
+    btnToggle.addEventListener('click', async () => {
+      if (isListening) {
+        stopListening();
+      } else {
+        await startListening();
+      }
+    });
+
+    async function startListening() {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
+        document.getElementById('srBadge').textContent = 'Fs: ' + audioCtx.sampleRate + ' Hz';
+
+        // 关键：针对音频调制解调，禁用降噪、回声抑制和自动增益，保留原始模拟波形
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+          }
+        });
+
+        const source = audioCtx.createMediaStreamSource(micStream);
+
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 1024;
+        analyserNode.smoothingTimeConstant = 0.4;
+        source.connect(analyserNode);
+
+        // 使用 ScriptProcessor 处理流式音频样本
+        scriptProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
+        source.connect(scriptProcessor);
+        // 连接到 destination 维持时钟，但将增益静音防止啸叫
+        const muteGain = audioCtx.createGain();
+        muteGain.gain.value = 0;
+        scriptProcessor.connect(muteGain);
+        muteGain.connect(audioCtx.destination);
+
+        scriptProcessor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < inputData.length; i++) {
+            audioSampleBuffer[bufferWriteIdx] = inputData[i];
+            bufferWriteIdx = (bufferWriteIdx + 1) % BUFFER_SIZE;
+          }
+          totalSamplesPushed += inputData.length;
+        };
+
+        isListening = true;
+        btnToggle.textContent = '⏹ 停止监听耳机孔信号';
+        btnToggle.className = 'btn btn-stop';
+        document.getElementById('rxStatus').textContent = '正在监听中...';
+        document.getElementById('rxStatus').style.color = '#10b981';
+
+        requestAnimationFrame(renderLoop);
+        startDemodulatorWorker();
+      } catch (err) {
+        alert('无法启动音频输入: ' + (err.message || err));
+      }
+    }
+
+    function stopListening() {
+      isListening = false;
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+      }
+      if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+      }
+      btnToggle.textContent = '▶ 启动耳机孔音频接收监听';
+      btnToggle.className = 'btn';
+      document.getElementById('rxStatus').textContent = '停止中';
+      document.getElementById('rxStatus').style.color = 'var(--text-dim)';
+    }
+
+    // 可视化渲染循环
+    const timeData = new Uint8Array(1024);
+    const freqData = new Uint8Array(512);
+
+    function renderLoop() {
+      if (!isListening) return;
+
+      if (analyserNode) {
+        analyserNode.getByteTimeDomainData(timeData);
+        analyserNode.getByteFrequencyData(freqData);
+
+        // 1. 绘制波形
+        waveCtx.fillStyle = '#070a12';
+        waveCtx.fillRect(0, 0, waveCanvas.width, waveCanvas.height);
+        waveCtx.strokeStyle = '#10b981';
+        waveCtx.lineWidth = 1.5;
+        waveCtx.beginPath();
+        for (let i = 0; i < timeData.length; i++) {
+          const x = (i / timeData.length) * waveCanvas.width;
+          const y = (timeData[i] / 255) * waveCanvas.height;
+          if (i === 0) waveCtx.moveTo(x, y);
+          else waveCtx.lineTo(x, y);
+        }
+        waveCtx.stroke();
+
+        // 2. 绘制频谱
+        specCtx.fillStyle = '#070a12';
+        specCtx.fillRect(0, 0, specCanvas.width, specCanvas.height);
+        const barWidth = (specCanvas.width / freqData.length) * 2;
+        let barX = 0;
+        for (let i = 0; i < freqData.length / 2; i++) {
+          const barHeight = (freqData[i] / 255) * specCanvas.height;
+          specCtx.fillStyle = (i > 15 && i < 35) ? '#06b6d4' : '#1e293b';
+          specCtx.fillRect(barX, specCanvas.height - barHeight, barWidth - 1, barHeight);
+          barX += barWidth;
+        }
+
+        // 3. 计算 RMS 电平
+        let sum = 0;
+        for (let i = 0; i < timeData.length; i++) {
+          const norm = (timeData[i] - 128) / 128;
+          sum += norm * norm;
+        }
+        const rms = Math.sqrt(sum / timeData.length);
+        const db = rms > 0.001 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
+        document.getElementById('rmsDbVal').textContent = db + ' dBFS';
+        document.getElementById('rmsFill').style.width = Math.min(100, rms * 250) + '%';
+      }
+
+      requestAnimationFrame(renderLoop);
+    }
+
+    // 流式 FSK 解调定时器
+    function startDemodulatorWorker() {
+      const timer = setInterval(() => {
+        if (!isListening || !audioCtx) {
+          clearInterval(timer);
+          return;
+        }
+
+        const sampleRate = audioCtx.sampleRate;
+        const baudRate = parseInt(document.getElementById('rxBaudRate').value);
+        const samplesPerSymbol = Math.round(sampleRate / baudRate);
+        const markFreq = 1200;
+        const spaceFreq = 2200;
+
+        const available = totalSamplesPushed - lastProcessedIdx;
+        if (available < samplesPerSymbol * 4) return;
+
+        // 批量提取未处理的音频进行解调
+        const processCount = Math.min(available, 4096);
+        const chunk = new Float32Array(processCount);
+        for (let i = 0; i < processCount; i++) {
+          const readPos = (lastProcessedIdx + i) % BUFFER_SIZE;
+          chunk[i] = audioSampleBuffer[readPos];
+        }
+        lastProcessedIdx += processCount;
+
+        // 正交匹配滤波解调
+        demodulateChunk(chunk, sampleRate, baudRate, markFreq, spaceFreq);
+      }, 50);
+    }
+
+    function demodulateChunk(chunk, sampleRate, baudRate, markFreq, spaceFreq) {
+      const N = Math.round(sampleRate / baudRate);
+      const twoPi = 2 * Math.PI;
+
+      let avgSnr = 0;
+      let count = 0;
+
+      for (let offset = 0; offset + N <= chunk.length; offset += N) {
+        let markI = 0, markQ = 0, spaceI = 0, spaceQ = 0;
+        for (let n = 0; n < N; n++) {
+          const val = chunk[offset + n];
+          const t = n / sampleRate;
+          markI += val * Math.cos(twoPi * markFreq * t);
+          markQ += val * Math.sin(twoPi * markFreq * t);
+          spaceI += val * Math.cos(twoPi * spaceFreq * t);
+          spaceQ += val * Math.sin(twoPi * spaceFreq * t);
+        }
+
+        const markEnergy = (markI * markI + markQ * markQ) / (N * N);
+        const spaceEnergy = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
+
+        if (markEnergy + spaceEnergy < 0.0001) continue; // 忽略静音
+
+        const bit = markEnergy >= spaceEnergy ? 1 : 0;
+        streamBitBuffer.push(bit);
+
+        const highE = Math.max(markEnergy, spaceEnergy);
+        const lowE = Math.min(markEnergy, spaceEnergy) + 1e-9;
+        avgSnr += 10 * Math.log10(highE / lowE);
+        count++;
+      }
+
+      if (count > 0) {
+        const snr = (avgSnr / count).toFixed(1);
+        document.getElementById('snrBadge').textContent = 'SNR: ' + snr + ' dB';
+      }
+
+      // 限制位缓冲大小
+      if (streamBitBuffer.length > 2000) {
+        streamBitBuffer = streamBitBuffer.slice(-1000);
+      }
+
+      // 尝试解析帧
+      parseFrames();
+    }
+
+    function parseFrames() {
+      let i = 0;
+      while (i <= streamBitBuffer.length - 32) {
+        // 查找同步字 0xD391
+        let match = true;
+        for (let s = 0; s < 16; s++) {
+          if (streamBitBuffer[i + s] !== SYNC_BITS[s]) {
+            match = false;
+            break;
+          }
+        }
+        if (!match) {
+          i++;
+          continue;
+        }
+
+        let cursor = i + 16;
+        let fecCorrectionsInPacket = 0;
+
+        // 帧头 (3 字节 = 42 bits)
+        if (cursor + 42 > streamBitBuffer.length) break;
+
+        const headerBytes = [];
+        for (let b = 0; b < 3; b++) {
+          let hCode = 0, lCode = 0;
+          for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | streamBitBuffer[cursor++];
+          for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | streamBitBuffer[cursor++];
+          const res = hammingDecodeByte(hCode, lCode);
+          headerBytes.push(res.byte);
+          fecCorrectionsInPacket += res.corrections;
+        }
+
+        const [seq, payloadLen, flags] = headerBytes;
+        const useFEC = (flags & 0x01) === 0x01;
+
+        if (payloadLen > 128) { i++; continue; }
+
+        const payloadBits = useFEC ? payloadLen * 14 : payloadLen * 8;
+        const crcBits = 28; // CRC 2 字节 = 4 个 7-bit 码字
+
+        if (cursor + payloadBits + crcBits > streamBitBuffer.length) break;
+
+        const payload = new Uint8Array(payloadLen);
+        for (let p = 0; p < payloadLen; p++) {
+          if (useFEC) {
+            let hCode = 0, lCode = 0;
+            for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | streamBitBuffer[cursor++];
+            for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | streamBitBuffer[cursor++];
+            const res = hammingDecodeByte(hCode, lCode);
+            payload[p] = res.byte;
+            fecCorrectionsInPacket += res.corrections;
+          } else {
+            let b = 0;
+            for (let bit = 0; bit < 8; bit++) b = (b << 1) | streamBitBuffer[cursor++];
+            payload[p] = b;
+          }
+        }
+
+        // CRC
+        const crcCodes = [];
+        for (let c = 0; c < 4; c++) {
+          let code = 0;
+          for (let bit = 0; bit < 7; bit++) code = (code << 1) | streamBitBuffer[cursor++];
+          crcCodes.push(code);
+        }
+        const crcH = hammingDecodeByte(crcCodes[0], crcCodes[1]);
+        const crcL = hammingDecodeByte(crcCodes[2], crcCodes[3]);
+        fecCorrectionsInPacket += crcH.corrections + crcL.corrections;
+        const receivedCrc = ((crcH.byte & 0xff) << 8) | (crcL.byte & 0xff);
+
+        // 验证 CRC
+        const checkData = new Uint8Array(3 + payload.length);
+        checkData[0] = seq; checkData[1] = payloadLen; checkData[2] = flags;
+        checkData.set(payload, 3);
+        const expectedCrc = computeCrc16(checkData);
+
+        const isValid = (receivedCrc === expectedCrc);
+
+        let decodedText = '';
+        try {
+          decodedText = new TextDecoder('utf-8').decode(payload);
+        } catch(e) {
+          decodedText = '[非UTF-8二进制数据]';
+        }
+
+        // 记录统计
+        if (isValid) {
+          validCount++;
+        } else {
+          errorCount++;
+        }
+        totalFecCorrections += fecCorrectionsInPacket;
+
+        updateStats();
+        appendMessage(seq, decodedText, isValid, fecCorrectionsInPacket);
+
+        // 移过本包
+        i = cursor;
+      }
+
+      if (i > 0) {
+        streamBitBuffer = streamBitBuffer.slice(i);
+      }
+    }
+
+    function updateStats() {
+      document.getElementById('statValid').textContent = validCount;
+      document.getElementById('statCorrected').textContent = totalFecCorrections;
+      const total = validCount + errorCount;
+      const rate = total > 0 ? ((errorCount / total) * 100).toFixed(1) : '0.0';
+      document.getElementById('statLossRate').textContent = rate + '%';
+    }
+
+    function appendMessage(seq, text, isValid, fecCorrections) {
+      const msgList = document.getElementById('msgList');
+      if (validCount + errorCount === 1) {
+        msgList.innerHTML = ''; // 清除初始提示
+      }
+
+      const item = document.createElement('div');
+      item.className = 'msg-item';
+
+      const timeStr = new Date().toLocaleTimeString();
+      item.innerHTML = `
+        <div class="msg-meta">
+          <span>包序号 #${seq} [${timeStr}]</span>
+          <span>
+            ${isValid ? '<b style="color:#10b981;">✓ CRC 校验通过</b>' : '<b style="color:#ef4444;">✗ CRC 校验失败 (丢包)</b>'}
+            ${fecCorrections > 0 ? ` · <span style="color:#38bdf8;">FEC修复 ${fecCorrections} 位错误</span>` : ''}
+          </span>
+        </div>
+        <div class="msg-text ${isValid ? '' : 'corrupted'}">${escapeHtml(text)}</div>
+      `;
+      msgList.insertBefore(item, msgList.firstChild);
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      }[tag] || tag));
+    }
+
+    document.getElementById('btnClearLog').addEventListener('click', () => {
+      document.getElementById('msgList').innerHTML = '<div style="color: var(--text-dim); font-size: 0.8rem; text-align: center; padding: 24px 0;">已清空记录</div>';
+      validCount = 0;
+      errorCount = 0;
+      totalFecCorrections = 0;
+      updateStats();
+    });
+  </script>
+</body>
+</html>
