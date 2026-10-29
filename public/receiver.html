@@ -248,7 +248,7 @@
       </p>
     </div>
 
-    <!-- 正在接收中的文件分卷进度卡片 -->
+    <!-- 正在接收中的文件分卷进度卡片 & 断点续传管理 -->
     <div class="card" id="activeFileCard" style="display: none; border-color: #0284c7; background: #082f4940;">
       <div class="card-title">
         <span style="color: #38bdf8;">📦 正在接收并拼接文件</span>
@@ -261,6 +261,23 @@
       <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
         <span id="activeFileChunks">0/0 分卷</span>
         <span id="activeFileBytes">0 字节</span>
+      </div>
+
+      <!-- 缺失分卷提示与一键复制 -->
+      <div id="missingChunksArea" style="display: none; margin-top: 10px; padding: 10px; background: #1e1b4b60; border: 1px solid #6366f1; border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 0.78rem; color: #fbbf24; font-weight: 600;">⚠️ 检测到缺失/重传分卷 (<span id="missingCount">0</span> 个)</span>
+          <button class="btn-secondary" id="btnCopyMissing" style="background: #fbbf24; color: #000; font-weight: 700; font-size: 0.72rem; padding: 4px 8px; cursor: pointer;">📋 一键复制缺失序号</button>
+        </div>
+        <div id="missingChunksList" style="font-family: monospace; font-size: 0.75rem; color: #e2e8f0; max-height: 60px; overflow-y: auto; word-break: break-all; background: #0f172a; padding: 6px; border-radius: 4px; user-select: all;"></div>
+        <p style="font-size: 0.7rem; color: var(--text-dim); margin-top: 4px;">
+          👉 复制后到发送端「批量输入包序号 · 选择性重传」中粘贴即可快速补传！
+        </p>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.72rem;">
+        <span style="color: var(--text-dim);">💾 进度已自动存储 (LocalStorage)</span>
+        <button class="btn-secondary" id="btnClearBreakpoint" style="color: #ef4444; border-color: #ef444450; font-size: 0.7rem; padding: 2px 6px; cursor: pointer;">清除断点</button>
       </div>
     </div>
 
@@ -414,11 +431,13 @@
         this.bitBuffer = [];
 
         this.clockPhase = 0;
+        this.clockFreqAdjust = 0; // Second-order loop integrator for crystal drift compensation
         this.lastDiscriminator = 0;
         this.markGain = 1.0;
         this.spaceGain = 1.0;
 
-        this.subSampleStep = Math.max(1, Math.round(this.samplesPerSymbol / 8));
+        // 12x oversampling for tight phase lock
+        this.subSampleStep = Math.max(1, Math.round(this.samplesPerSymbol / 12));
       }
 
       pushAudio(samples) {
@@ -463,17 +482,19 @@
           snrSum += 10 * Math.log10(signalE / noiseE);
           snrCount++;
 
-          // DPLL Zero-Crossing Clock Tracking
+          // Second-order DPLL Zero-Crossing Clock Tracking
           if ((this.lastDiscriminator < 0 && discriminator >= 0) || (this.lastDiscriminator >= 0 && discriminator < 0)) {
             const phaseError = this.clockPhase < N / 2 ? this.clockPhase : this.clockPhase - N;
-            this.clockPhase -= phaseError * 0.25;
+            this.clockPhase -= phaseError * 0.4;
+            this.clockFreqAdjust = Math.max(-1.5, Math.min(1.5, this.clockFreqAdjust - phaseError * 0.02));
             if (this.clockPhase < 0) this.clockPhase += N;
             if (this.clockPhase >= N) this.clockPhase -= N;
           }
           this.lastDiscriminator = discriminator;
 
           const prevClock = this.clockPhase;
-          this.clockPhase += S;
+          const step = S + (this.clockFreqAdjust * S) / N;
+          this.clockPhase += step;
 
           if (prevClock < N / 2 && this.clockPhase >= N / 2) {
             this.bitBuffer.push(discriminator >= 0 ? 1 : 0);
@@ -614,13 +635,17 @@
       if (packetType === PacketType.FILE_START) {
         try {
           const meta = JSON.parse(new TextDecoder('utf-8').decode(payload));
-          activeFileTransfer = {
-            name: meta.name,
-            size: meta.size,
-            totalChunks: meta.chunks,
-            mime: meta.mime || 'application/octet-stream',
-            chunks: new Map()
-          };
+          const isSame = activeFileTransfer && activeFileTransfer.name === meta.name && activeFileTransfer.totalChunks === meta.chunks;
+          if (!isSame) {
+            activeFileTransfer = {
+              name: meta.name,
+              size: meta.size,
+              totalChunks: meta.chunks,
+              mime: meta.mime || 'application/octet-stream',
+              chunks: new Map()
+            };
+          }
+          saveBreakpoint();
           updateActiveFileUI();
           appendMessage(seq, `[启动文件接收: ${meta.name} (${meta.size} 字节, ${meta.chunks} 分卷)]`, true, fecCorrections, packetType);
         } catch(e) {}
@@ -641,6 +666,7 @@
         const totalChunks = (payload[2] << 8) | payload[3];
         const slice = payload.subarray(4);
         activeFileTransfer.chunks.set(chunkIdx, slice);
+        saveBreakpoint();
         updateActiveFileUI();
         appendMessage(seq, `[分卷 #${chunkIdx + 1}/${totalChunks} · ${slice.length} 字节]`, true, fecCorrections, packetType);
       } else if (packetType === PacketType.FILE_END) {
@@ -649,9 +675,78 @@
         appendMessage(seq, `[文件传输结束: ${endMeta ? endMeta.name : '完成'}]`, true, fecCorrections, packetType);
 
         if (activeFileTransfer) {
-          assembleFile(endMeta);
+          if (activeFileTransfer.chunks.size >= activeFileTransfer.totalChunks) {
+            assembleFile(endMeta);
+          } else {
+            saveBreakpoint();
+            updateActiveFileUI();
+          }
         }
       }
+    }
+
+    function getMissingChunkNumbers() {
+      if (!activeFileTransfer) return [];
+      const missing = [];
+      for (let i = 0; i < activeFileTransfer.totalChunks; i++) {
+        if (!activeFileTransfer.chunks.has(i)) {
+          missing.push(i + 1); // 1-based for user
+        }
+      }
+      return missing;
+    }
+
+    function saveBreakpoint() {
+      if (!activeFileTransfer) return;
+      try {
+        const chunksObj = {};
+        for (const [idx, data] of activeFileTransfer.chunks.entries()) {
+          let binary = '';
+          for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);
+          chunksObj[idx] = btoa(binary);
+        }
+        const saved = {
+          name: activeFileTransfer.name,
+          size: activeFileTransfer.size,
+          totalChunks: activeFileTransfer.totalChunks,
+          mime: activeFileTransfer.mime,
+          chunks: chunksObj,
+          time: Date.now()
+        };
+        localStorage.setItem('audiojack_rx_breakpoint', JSON.stringify(saved));
+      } catch(e) {}
+    }
+
+    function loadBreakpoint() {
+      try {
+        const raw = localStorage.getItem('audiojack_rx_breakpoint');
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (!saved.name || !saved.totalChunks) return;
+        const chunks = new Map();
+        if (saved.chunks) {
+          for (const [key, b64] of Object.entries(saved.chunks)) {
+            const bin = atob(b64);
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            chunks.set(parseInt(key, 10), arr);
+          }
+        }
+        activeFileTransfer = {
+          name: saved.name,
+          size: saved.size || 0,
+          totalChunks: saved.totalChunks,
+          mime: saved.mime || 'application/octet-stream',
+          chunks
+        };
+        updateActiveFileUI();
+      } catch(e) {}
+    }
+
+    function clearBreakpoint() {
+      try { localStorage.removeItem('audiojack_rx_breakpoint'); } catch(e) {}
+      activeFileTransfer = null;
+      updateActiveFileUI();
     }
 
     function updateActiveFileUI() {
@@ -675,6 +770,17 @@
         totalBytes += slice.length;
       }
       document.getElementById('activeFileBytes').textContent = totalBytes + ' 字节已就绪';
+
+      // Missing chunks warning
+      const missing = getMissingChunkNumbers();
+      const missingArea = document.getElementById('missingChunksArea');
+      if (missing.length > 0) {
+        missingArea.style.display = 'block';
+        document.getElementById('missingCount').textContent = missing.length;
+        document.getElementById('missingChunksList').textContent = missing.join(', ');
+      } else {
+        missingArea.style.display = 'none';
+      }
     }
 
     function assembleFile(endMeta) {
@@ -719,8 +825,7 @@
         time: new Date().toLocaleTimeString()
       });
 
-      activeFileTransfer = null;
-      updateActiveFileUI();
+      clearBreakpoint();
       renderReceivedFiles();
     }
 
@@ -978,6 +1083,25 @@
       totalFecCorrections = 0;
       updateStats();
     });
+
+    document.getElementById('btnCopyMissing').addEventListener('click', () => {
+      const missing = getMissingChunkNumbers();
+      if (missing.length === 0) return;
+      const text = missing.join(', ');
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text);
+        const btn = document.getElementById('btnCopyMissing');
+        btn.textContent = '✓ 已复制！';
+        setTimeout(() => { btn.textContent = '📋 一键复制缺失序号'; }, 2500);
+      }
+    });
+
+    document.getElementById('btnClearBreakpoint').addEventListener('click', () => {
+      clearBreakpoint();
+    });
+
+    // Load persisted breakpoint on initial load
+    loadBreakpoint();
   </script>
 </body>
 </html>

@@ -286,5 +286,83 @@ test('20x Extreme Mode: 2000 bps CPFSK orthogonal modulation and demodulation (2
   assert.equal(packets[0].text, message);
 });
 
+test('Selective Retransmission (ARQ): Hole filling and selective packet retransmission', () => {
+  const filename = 'patch.bin';
+  const fileBytes = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]);
+  const config = { ...DEFAULT_CONFIG, sampleRate: 48000, baudRate: 500, markFreq: 1500, spaceFreq: 2500, useFEC: true };
+
+  // 1. Split file into 4 chunks (3 bytes each) -> chunks 0, 1, 2, 3
+  const allPackets = FileChunker.createFilePackets(filename, fileBytes, 'application/octet-stream', 3, true, 1);
+  assert.equal(allPackets.length, 6); // FILE_START, 4x DATA, FILE_END
+
+  const demodulator = new FSKDemodulator(config);
+  const assembler = new FileAssembler();
+  assembler.clearStorage();
+  let completedFile: any = null;
+  assembler.onComplete = (f) => { completedFile = f; };
+
+  // 2. Deliver FILE_START, chunk 0, chunk 2, chunk 3, and FILE_END (Simulate dropping chunk 1!)
+  const droppedIndices = [2]; // packet index 2 corresponds to chunk 1
+  for (let i = 0; i < allPackets.length; i++) {
+    if (i === 2) continue; // DROP CHUNK 1
+    const p = allPackets[i];
+    const audio = FSKModulator.modulate(p.bits, config);
+    const pkts = demodulator.processAudioBuffer(audio);
+    for (const pkt of pkts) assembler.processPacket(pkt);
+  }
+
+  // File should NOT be complete yet, because chunk 1 is missing!
+  assert.equal(completedFile, null, 'File should not be complete when chunk 1 is missing');
+  const missing = assembler.getMissingChunkIndices();
+  assert.deepEqual(missing, [1], 'Missing chunk index should be 1');
+  const missing1Based = assembler.getMissingChunkNumbers1Based();
+  assert.deepEqual(missing1Based, [2], '1-based missing chunk number should be 2');
+
+  // 3. Perform selective retransmission for chunk 1 (0-based)
+  const retransmitPackets = FileChunker.createSelectivePackets(
+    filename,
+    fileBytes,
+    'application/octet-stream',
+    3,
+    true,
+    [1], // retransmit chunk 1
+    99
+  );
+  assert.equal(retransmitPackets.length, 1);
+
+  // Deliver the retransmitted chunk to assembler
+  const retransmitAudio = FSKModulator.modulate(retransmitPackets[0].bits, config);
+  const rxPkts = demodulator.processAudioBuffer(retransmitAudio);
+  for (const pkt of rxPkts) {
+    assembler.processPacket(pkt);
+  }
+
+  // Now the file should be finalized and complete!
+  if (!completedFile) {
+    completedFile = assembler.finalizeFile();
+  }
+  assert.ok(completedFile !== null, 'File should finalize after receiving dropped chunk');
+  assert.equal(completedFile.size, fileBytes.length);
+  assert.equal(completedFile.crcValid, true);
+  assert.deepEqual(completedFile.data, fileBytes);
+});
+
+test('parseChunkNumbersInput: parses single, comma-separated, space-separated, and range numbers', async () => {
+  const { parseChunkNumbersInput } = await import('./fsk');
+  // 1-based user input "1, 3, 5-7, 10" with maxChunks = 12
+  const parsed = parseChunkNumbersInput('1, 3, 5-7, 10', 12);
+  // Expect 0-based indices: 0, 2, 4, 5, 6, 9
+  assert.deepEqual(parsed, [0, 2, 4, 5, 6, 9]);
+
+  // Chinese punctuation and spaces
+  const parsedZh = parseChunkNumbersInput('2， 4； 8~10', 10);
+  assert.deepEqual(parsedZh, [1, 3, 7, 8, 9]);
+
+  // Out of bounds filtering
+  const parsedOob = parseChunkNumbersInput('0, 1, 99', 5);
+  assert.deepEqual(parsedOob, [0]);
+});
+
+
 
 

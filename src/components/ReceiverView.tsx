@@ -20,7 +20,10 @@ import {
   Package,
   Eye,
   EyeOff,
-  Zap
+  Zap,
+  Copy,
+  Check,
+  RotateCcw
 } from 'lucide-react';
 import {
   FSKDemodulator,
@@ -28,6 +31,7 @@ import {
   FileAssembler,
   AssembledFile,
   FileProgress,
+  ActiveTransferInfo,
   PacketType,
   SPEED_PRESETS
 } from '../dsp/fsk';
@@ -66,6 +70,8 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
   // File Transfer State
   const [activeFileProgress, setActiveFileProgress] = useState<FileProgress | null>(null);
+  const [activeTransferInfo, setActiveTransferInfo] = useState<ActiveTransferInfo | null>(null);
+  const [copiedToast, setCopiedToast] = useState(false);
   const [receivedFiles, setReceivedFiles] = useState<AssembledFile[]>([]);
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
 
@@ -101,19 +107,47 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
     // File assembler
     const assembler = new FileAssembler();
+    const existing = assembler.getActiveTransfer();
+    if (existing && existing.receivedChunks > 0) {
+      setActiveTransferInfo(existing);
+    }
+
     assembler.onProgress = (prog) => {
       setActiveFileProgress({ ...prog });
+      setActiveTransferInfo(assembler.getActiveTransfer());
       setStatusMessage(`正在接收文件 [${prog.name}]: 分卷 ${prog.receivedChunks}/${prog.totalChunks} (${prog.percent}%)`);
     };
 
     assembler.onComplete = (file) => {
       setReceivedFiles((prev) => [file, ...prev]);
       setActiveFileProgress(null);
+      setActiveTransferInfo(null);
       setStatusMessage(`✓ 文件 [${file.name}] 已成功重组接收完毕 (${file.size} 字节，CRC-16 校验 ${file.crcValid ? '通过' : '失败'})`);
     };
 
     fileAssemblerRef.current = assembler;
   }, [sampleRate, baudRate, markFreq, spaceFreq]);
+
+  const handleCopyMissingChunks = () => {
+    if (!fileAssemblerRef.current) return;
+    const missing = fileAssemblerRef.current.getMissingChunkNumbers1Based();
+    if (missing.length === 0) return;
+    const str = missing.join(', ');
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(str);
+      setCopiedToast(true);
+      setTimeout(() => setCopiedToast(false), 3000);
+    }
+  };
+
+  const handleClearBreakpoint = () => {
+    if (fileAssemblerRef.current) {
+      fileAssemblerRef.current.clearStorage();
+      setActiveTransferInfo(null);
+      setActiveFileProgress(null);
+      setStatusMessage('已清空断点续传文件缓存');
+    }
+  };
 
   const handleNewPacket = useCallback((pkt: DecodedPacket) => {
     setPackets((prev) => [pkt, ...prev.slice(0, 49)]);
@@ -129,6 +163,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     // Feed to File Assembler
     if (fileAssemblerRef.current && pkt.crcValid) {
       fileAssemblerRef.current.processPacket(pkt);
+      setActiveTransferInfo(fileAssemblerRef.current.getActiveTransfer());
     }
   }, []);
 
@@ -620,6 +655,80 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
               </div>
             </div>
           </div>
+
+          {/* ACTIVE FILE TRANSFER & BREAKPOINT ARQ CARD */}
+          {activeTransferInfo && (
+            <div className="bg-slate-900/90 border border-cyan-800/60 rounded-xl p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-sm font-semibold text-white">断点续传与分卷进度</h3>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+                  {activeTransferInfo.receivedChunks}/{activeTransferInfo.totalChunks} 分卷
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-white font-medium truncate">{activeTransferInfo.name}</span>
+                  <span className="font-mono text-cyan-400 font-bold">{activeTransferInfo.percent}%</span>
+                </div>
+
+                <div className="h-2.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-200"
+                    style={{ width: `${activeTransferInfo.percent}%` }}
+                  />
+                </div>
+
+                {activeTransferInfo.missingChunksCount > 0 ? (
+                  <div className="p-3 bg-slate-950 rounded-lg border border-amber-900/50 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-amber-400 font-semibold flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>检测到 {activeTransferInfo.missingChunksCount} 个缺失/校验失败分卷</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCopyMissingChunks}
+                        className="flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-xs font-medium transition cursor-pointer"
+                      >
+                        {copiedToast ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedToast ? '已复制！' : '一键复制缺失序号'}</span>
+                      </button>
+                    </div>
+
+                    <div className="p-2 bg-slate-900 rounded font-mono text-[11px] text-slate-300 max-h-20 overflow-y-auto break-all select-all">
+                      {activeTransferInfo.missingChunksFormatted}
+                    </div>
+
+                    <p className="text-[11px] text-slate-400">
+                      👉 点击「一键复制缺失序号」后，在发送端的「批量输入包序号 · 选择性重传」中粘贴发送，即可瞬间补齐！
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-2 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs">
+                    ✓ 全部分卷已就绪，正在完成全文件 CRC-16 组装！
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-slate-500">
+                    💾 进度已自动持久化存储 (LocalStorage)，页面刷新不丢失
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleClearBreakpoint}
+                    className="text-[11px] text-slate-400 hover:text-red-400 transition cursor-pointer flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>清除断点缓存</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* COMPLETED RECEIVED FILES DRAWER */}
           {receivedFiles.length > 0 && (

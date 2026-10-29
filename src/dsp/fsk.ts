@@ -117,7 +117,10 @@ export class CRC16 {
 // ============================================================================
 // 3. PACKET & PROTOCOL DEFINITIONS
 // ============================================================================
-export const PREAMBLE_BITS = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]; // 24 bits for rock-solid lock
+export const PREAMBLE_BITS = [
+  1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+  1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0
+]; // 32 bits (16 cycles) for rock-solid lock across different mobile DAC/ADC crystals
 export const SYNC_WORD = 0xd391; // 16-bit Barker-like sync sequence: 11010011 10010001
 export const SYNC_BITS = [1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1]; // 16 bits
 
@@ -173,7 +176,7 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
     baudRate: 500,
     markFreq: 1500,
     spaceFreq: 2500,
-    recommendedChunkSize: 96,
+    recommendedChunkSize: 64,
     recommendedUseFEC: true,
     speedMultiplier: 5,
     description: '平稳加速，适合普通 3.5mm 对录线与各类安卓手机',
@@ -186,10 +189,10 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
     baudRate: 1000,
     markFreq: 2000,
     spaceFreq: 3000,
-    recommendedChunkSize: 192,
+    recommendedChunkSize: 64, // 64B provides ideal <0.8s packet duration, preventing DAC/ADC crystal drift slips!
     recommendedUseFEC: false, // On 3.5mm cable SNR>30dB, pure CRC provides 100% throughput!
     speedMultiplier: 10,
-    description: '精准正交 MSK/CPFSK 调制 (Δf=1000Hz=1/Ts)，对录线零串扰黄金频段',
+    description: '精准正交 MSK/CPFSK 调制 (Δf=1000Hz=1/Ts)，推荐64B/96B切片彻底消除时钟漂移',
     throughputDesc: '有效 ~118 字节/秒 (纯CRC) / ~71 字节/秒 (含FEC)',
     est500kDuration: '约 72 分钟 (纯CRC模式)',
   },
@@ -199,7 +202,7 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
     baudRate: 2000,
     markFreq: 2000,
     spaceFreq: 4000,
-    recommendedChunkSize: 220,
+    recommendedChunkSize: 80,
     recommendedUseFEC: false,
     speedMultiplier: 20,
     description: '20倍极致速率，要求高品质金属编织屏蔽对录线及无失真输出',
@@ -391,10 +394,95 @@ export class FileChunker {
 
     return packets;
   }
+
+  /**
+   * Creates FILE_DATA packets ONLY for specified chunk indices (selective repeat ARQ).
+   * Supports chunkIndices as 0-based integers.
+   */
+  static createSelectivePackets(
+    filename: string,
+    fileBytes: Uint8Array,
+    mimeType: string = 'application/octet-stream',
+    chunkSize: number = 64,
+    useFEC: boolean = true,
+    chunkIndices: number[] = [],
+    startSeq: number = 1
+  ): { seq: number; chunkIdx: number; packetType: PacketType; bits: number[]; description: string; payload: Uint8Array }[] {
+    const totalChunks = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
+    const packets = [];
+    let curSeq = startSeq;
+
+    // Filter valid indices and sort
+    const validIndices = Array.from(new Set(chunkIndices))
+      .filter((idx) => idx >= 0 && idx < totalChunks)
+      .sort((a, b) => a - b);
+
+    for (const c of validIndices) {
+      const slice = fileBytes.subarray(c * chunkSize, Math.min(fileBytes.length, (c + 1) * chunkSize));
+      const chunkPayload = new Uint8Array(4 + slice.length);
+      chunkPayload[0] = (c >> 8) & 0xff;
+      chunkPayload[1] = c & 0xff;
+      chunkPayload[2] = (totalChunks >> 8) & 0xff;
+      chunkPayload[3] = totalChunks & 0xff;
+      chunkPayload.set(slice, 4);
+
+      const dataBits = FrameEncoder.encodePacketToBits(chunkPayload, curSeq & 0xff, useFEC, PacketType.FILE_DATA);
+      packets.push({
+        seq: curSeq & 0xff,
+        chunkIdx: c,
+        packetType: PacketType.FILE_DATA,
+        bits: dataBits,
+        description: `重传分卷 [${c + 1}/${totalChunks}] (${slice.length} 字节)`,
+        payload: chunkPayload,
+      });
+      curSeq++;
+    }
+
+    return packets;
+  }
+}
+
+/**
+ * Parses user input for packet/chunk numbers (1-based from UI).
+ * Supports comma-separated, space-separated, and ranges: "1, 2, 5-8, 154"
+ * Returns sorted unique 0-based chunk indices.
+ */
+export function parseChunkNumbersInput(input: string, maxChunks: number): number[] {
+  const indices = new Set<number>();
+  if (!input || !input.trim()) return [];
+
+  const parts = input.replace(/，/g, ',').replace(/；/g, ';').split(/[\s,;]+/);
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (trimmed.includes('-') || trimmed.includes('~')) {
+      const rangeParts = trimmed.split(/[-~]/);
+      if (rangeParts.length === 2) {
+        const start = parseInt(rangeParts[0], 10);
+        const end = parseInt(rangeParts[1], 10);
+        if (!isNaN(start) && !isNaN(end)) {
+          const lo = Math.min(start, end);
+          const hi = Math.max(start, end);
+          for (let n = lo; n <= hi; n++) {
+            if (n >= 1 && n <= maxChunks) {
+              indices.add(n - 1);
+            }
+          }
+        }
+      }
+    } else {
+      const num = parseInt(trimmed, 10);
+      if (!isNaN(num) && num >= 1 && num <= maxChunks) {
+        indices.add(num - 1);
+      }
+    }
+  }
+
+  return Array.from(indices).sort((a, b) => a - b);
 }
 
 // ============================================================================
-// 4.2. FILE ASSEMBLER (RECEIVER ACCUMULATOR)
+// 4.2. FILE ASSEMBLER (RECEIVER ACCUMULATOR & BREAKPOINT MANAGER)
 // ============================================================================
 export interface AssembledFile {
   name: string;
@@ -419,6 +507,18 @@ export interface FileProgress {
   status: 'receiving' | 'completed' | 'corrupted';
 }
 
+export interface ActiveTransferInfo {
+  name: string;
+  size: number;
+  totalChunks: number;
+  mime: string;
+  receivedChunks: number;
+  missingChunksCount: number;
+  missingChunksFormatted: string;
+  percent: number;
+  startTime: number;
+}
+
 export class FileAssembler {
   private activeTransfer: {
     name: string;
@@ -433,27 +533,142 @@ export class FileAssembler {
   public onProgress?: (progress: FileProgress) => void;
   public onComplete?: (file: AssembledFile) => void;
 
+  constructor() {
+    this.loadFromStorage();
+  }
+
+  public getActiveTransfer(): ActiveTransferInfo | null {
+    if (!this.activeTransfer) return null;
+    const missing = this.getMissingChunkNumbers1Based();
+    return {
+      name: this.activeTransfer.name,
+      size: this.activeTransfer.size,
+      totalChunks: this.activeTransfer.totalChunks,
+      mime: this.activeTransfer.mime,
+      receivedChunks: this.activeTransfer.chunks.size,
+      missingChunksCount: missing.length,
+      missingChunksFormatted: this.getMissingChunksFormatted(),
+      percent: Math.min(100, Math.round((this.activeTransfer.chunks.size / this.activeTransfer.totalChunks) * 100)),
+      startTime: this.activeTransfer.startTime,
+    };
+  }
+
+  public getMissingChunkIndices(): number[] {
+    if (!this.activeTransfer) return [];
+    const missing: number[] = [];
+    for (let i = 0; i < this.activeTransfer.totalChunks; i++) {
+      if (!this.activeTransfer.chunks.has(i)) {
+        missing.push(i);
+      }
+    }
+    return missing;
+  }
+
+  public getMissingChunkNumbers1Based(): number[] {
+    return this.getMissingChunkIndices().map((i) => i + 1);
+  }
+
+  public getMissingChunksFormatted(): string {
+    const nums = this.getMissingChunkNumbers1Based();
+    if (nums.length === 0) return '';
+    if (nums.length <= 50) return nums.join(', ');
+    return nums.slice(0, 30).join(', ') + ` ...等共 ${nums.length} 个分卷`;
+  }
+
+  public saveToStorage(): void {
+    if (typeof localStorage === 'undefined' || !this.activeTransfer) return;
+    try {
+      const chunksObj: Record<string, string> = {};
+      for (const [idx, data] of this.activeTransfer.chunks.entries()) {
+        let binary = '';
+        for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);
+        chunksObj[idx] = btoa(binary);
+      }
+      const saved = {
+        name: this.activeTransfer.name,
+        size: this.activeTransfer.size,
+        totalChunks: this.activeTransfer.totalChunks,
+        mime: this.activeTransfer.mime,
+        expectedCrc: this.activeTransfer.expectedCrc,
+        startTime: this.activeTransfer.startTime,
+        chunks: chunksObj,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem('audiojack_breakpoint_transfer', JSON.stringify(saved));
+    } catch {}
+  }
+
+  public loadFromStorage(): boolean {
+    if (typeof localStorage === 'undefined') return false;
+    try {
+      const raw = localStorage.getItem('audiojack_breakpoint_transfer');
+      if (!raw) return false;
+      const saved = JSON.parse(raw);
+      if (!saved.name || !saved.totalChunks) return false;
+
+      const chunks = new Map<number, Uint8Array>();
+      if (saved.chunks) {
+        for (const [key, b64] of Object.entries(saved.chunks)) {
+          const bin = atob(b64 as string);
+          const arr = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          chunks.set(parseInt(key, 10), arr);
+        }
+      }
+
+      this.activeTransfer = {
+        name: saved.name,
+        size: saved.size || 0,
+        totalChunks: saved.totalChunks,
+        mime: saved.mime || 'application/octet-stream',
+        expectedCrc: saved.expectedCrc,
+        startTime: saved.startTime || Date.now(),
+        chunks,
+      };
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public clearStorage(): void {
+    if (typeof localStorage !== 'undefined') {
+      try { localStorage.removeItem('audiojack_breakpoint_transfer'); } catch {}
+    }
+    this.activeTransfer = null;
+  }
+
   public processPacket(packet: DecodedPacket): AssembledFile | null {
     if (!packet.crcValid) return null;
 
     if (packet.packetType === PacketType.FILE_START && packet.fileMeta) {
-      this.activeTransfer = {
-        name: packet.fileMeta.name,
-        size: packet.fileMeta.size,
-        totalChunks: packet.fileMeta.chunks,
-        mime: packet.fileMeta.mime || 'application/octet-stream',
-        chunks: new Map(),
-        startTime: Date.now(),
-      };
+      // If we already had an active transfer for this EXACT file, preserve existing chunks!
+      const isExistingTransfer = this.activeTransfer &&
+        this.activeTransfer.name === packet.fileMeta.name &&
+        this.activeTransfer.totalChunks === packet.fileMeta.chunks;
 
-      if (this.onProgress) {
+      if (!isExistingTransfer) {
+        this.activeTransfer = {
+          name: packet.fileMeta.name,
+          size: packet.fileMeta.size,
+          totalChunks: packet.fileMeta.chunks,
+          mime: packet.fileMeta.mime || 'application/octet-stream',
+          chunks: new Map(),
+          startTime: Date.now(),
+        };
+      }
+
+      this.saveToStorage();
+
+      if (this.onProgress && this.activeTransfer) {
         this.onProgress({
           name: this.activeTransfer.name,
-          receivedChunks: 0,
+          receivedChunks: this.activeTransfer.chunks.size,
           totalChunks: this.activeTransfer.totalChunks,
           receivedBytes: 0,
           totalBytes: this.activeTransfer.size,
-          percent: 0,
+          percent: Math.min(100, Math.round((this.activeTransfer.chunks.size / this.activeTransfer.totalChunks) * 100)),
           status: 'receiving',
         });
       }
@@ -474,6 +689,7 @@ export class FileAssembler {
 
       const chunkIdx = packet.fileMeta.chunkIdx ?? 0;
       this.activeTransfer.chunks.set(chunkIdx, packet.fileMeta.chunkData);
+      this.saveToStorage();
 
       let bytesReceived = 0;
       for (const data of this.activeTransfer.chunks.values()) {
@@ -506,13 +722,18 @@ export class FileAssembler {
       if (packet.fileMeta && packet.fileMeta.crc !== undefined) {
         this.activeTransfer.expectedCrc = packet.fileMeta.crc;
       }
-      return this.finalizeFile();
+      // If all chunks received, finalize; otherwise wait for missing chunks!
+      if (this.activeTransfer.chunks.size >= this.activeTransfer.totalChunks) {
+        return this.finalizeFile();
+      }
+      this.saveToStorage();
+      return null;
     }
 
     return null;
   }
 
-  private finalizeFile(): AssembledFile | null {
+  public finalizeFile(): AssembledFile | null {
     if (!this.activeTransfer) return null;
 
     const { name, size, totalChunks, mime, chunks } = this.activeTransfer;
@@ -567,7 +788,7 @@ export class FileAssembler {
       this.onComplete(assembled);
     }
 
-    this.activeTransfer = null;
+    this.clearStorage();
     return assembled;
   }
 }
@@ -640,8 +861,9 @@ export class FSKDemodulator {
   // Persistent streaming bit buffer
   private bitBuffer: number[] = [];
 
-  // Symbol clock recovery & tracking state (DPLL)
+  // Symbol clock recovery & tracking state (Second-order DPLL)
   private clockPhase: number = 0;
+  private clockFreqAdjust: number = 0; // Frequency tracking integrator (PPM drift compensation)
   private lastDiscriminator: number = 0;
 
   // Adaptive channel equalizer (balances 1200Hz vs 2200Hz phone mic gain differences)
@@ -676,6 +898,7 @@ export class FSKDemodulator {
     this.sampleBuffer = [];
     this.bitBuffer = [];
     this.clockPhase = 0;
+    this.clockFreqAdjust = 0;
     this.lastDiscriminator = 0;
     this.maxMarkEnergy = 0.001;
     this.maxSpaceEnergy = 0.001;
@@ -721,8 +944,8 @@ export class FSKDemodulator {
     }
 
     const N = this.samplesPerSymbol;
-    // Step stride: evaluate discriminator every S samples (oversampling by 8x for tight symbol phase sync)
-    const S = Math.max(1, Math.floor(N / 8));
+    // Step stride: evaluate discriminator every S samples (12x oversampling for tight symbol phase sync)
+    const S = Math.max(1, Math.floor(N / 12));
 
     let processedSamples = 0;
     let snrSum = 0;
@@ -780,7 +1003,7 @@ export class FSKDemodulator {
       snrSum += localSnrDb;
       snrSamplesCount++;
 
-      // Symbol Clock Recovery (DPLL):
+      // Symbol Clock Recovery (Second-order DPLL):
       // A zero-crossing of discriminator indicates a transition between Mark and Space (symbol boundary)
       if (this.lastDiscriminator * discriminator < 0) {
         // Transition detected!
@@ -789,14 +1012,16 @@ export class FSKDemodulator {
         if (phaseError > N / 2) {
           phaseError -= N;
         }
-        // Nudge DPLL clock phase towards 0 (loop gain alpha = 0.35)
-        this.clockPhase -= Math.round(phaseError * 0.35);
+        // Second-order proportional & integral feedback
+        this.clockPhase -= phaseError * 0.4;
+        this.clockFreqAdjust = Math.max(-1.5, Math.min(1.5, this.clockFreqAdjust - phaseError * 0.02));
       }
       this.lastDiscriminator = discriminator;
 
-      // Advance symbol clock
+      // Advance symbol clock with crystal PPM drift compensation
       const prevClock = this.clockPhase;
-      this.clockPhase += S;
+      const step = S + (this.clockFreqAdjust * S) / N;
+      this.clockPhase += step;
 
       // When the clock phase passes through the middle of the symbol (N/2, optimal eye opening):
       // Sample the bit!

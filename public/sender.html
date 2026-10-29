@@ -298,9 +298,10 @@
             <label>分卷切片大小 (Chunk Size)</label>
             <select id="chunkSizeSelect">
               <option value="32">32 字节 (超稳小包)</option>
-              <option value="48" selected>48 字节 (100 bps 标准)</option>
+              <option value="48">48 字节 (100 bps 标准)</option>
+              <option value="64" selected>64 字节 (⚡ 1000 bps 推荐，抗晶振漂移最佳)</option>
               <option value="96">96 字节 (500 bps 推荐)</option>
-              <option value="128">128 字节 (⚡ 1000 bps Turbo 推荐)</option>
+              <option value="128">128 字节 (1000 bps 大包模式)</option>
               <option value="192">192 字节 (超大分卷，开销 &lt; 3%)</option>
               <option value="220">220 字节 (极限容量分卷)</option>
             </select>
@@ -325,6 +326,28 @@
           <span>📦</span>
           <span>开始音频文件传输</span>
         </button>
+
+        <!-- 批量输入包序号重传 & 断点续传 -->
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--card-border);">
+          <label style="color: #38bdf8; font-weight: 600;">🔄 批量输入包序号 · 选择性重传 (ARQ)</label>
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <input type="text" id="retransmitInput" placeholder="输入包序号，如: 154 或 5, 12, 154 或 10-15" style="flex: 1;">
+            <button class="btn btn-secondary" id="btnRetransmit" style="width: auto; background: #0284c7; color: #fff; font-weight: 600; white-space: nowrap;">仅重传指定分卷</button>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-dim); margin-top: 4px;">
+            💡 提示：从接收端一键复制缺失分卷序号，直接粘贴到上方重传即可，无需重发整个文件。
+          </p>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <label style="color: var(--success); font-weight: 600;">⏩ 断点续传 (Resume)</label>
+          <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+            <span style="font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;">从第</span>
+            <input type="number" id="resumeStartInput" min="1" value="1" style="width: 70px;">
+            <span style="font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;">卷续传至末尾</span>
+            <button class="btn btn-secondary" id="btnResume" style="flex: 1; background: #059669; color: #fff; font-weight: 600;">开始断点续传</button>
+          </div>
+        </div>
       </div>
 
       <button class="btn btn-secondary btn-danger" id="btnStop" style="margin-top: 8px; display: none;">
@@ -401,8 +424,39 @@
       return crc & 0xffff;
     }
 
-    const PREAMBLE_BITS = [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0];
+    const PREAMBLE_BITS = [
+      1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,
+      1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0
+    ]; // 32 bits for rock-solid lock across devices
     const SYNC_BITS = [1,1,0,1,0,0,1,1,1,0,0,1,0,0,0,1]; // 0xD391
+
+    function parseChunkNumbersInput(input, maxChunks) {
+      const indices = new Set();
+      if (!input || !input.trim()) return [];
+      const parts = input.replace(/，/g, ',').replace(/；/g, ';').split(/[\s,;]+/);
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        if (trimmed.includes('-') || trimmed.includes('~')) {
+          const rangeParts = trimmed.split(/[-~]/);
+          if (rangeParts.length === 2) {
+            const start = parseInt(rangeParts[0], 10);
+            const end = parseInt(rangeParts[1], 10);
+            if (!isNaN(start) && !isNaN(end)) {
+              for (let n = Math.min(start, end); n <= Math.max(start, end); n++) {
+                if (n >= 1 && n <= maxChunks) indices.add(n - 1);
+              }
+            }
+          }
+        } else {
+          const num = parseInt(trimmed, 10);
+          if (!isNaN(num) && num >= 1 && num <= maxChunks) {
+            indices.add(num - 1);
+          }
+        }
+      }
+      return Array.from(indices).sort((a, b) => a - b);
+    }
 
     const PacketType = {
       TEXT: 0,
@@ -818,6 +872,172 @@
       document.getElementById('btnStop').style.display = 'none';
       if (!isCancelled) {
         document.getElementById('txStatus').textContent = '✓ 文件 ' + selectedFile.name + ' 全部分卷发送完成！';
+        document.getElementById('txStatus').style.color = '#10b981';
+      }
+    });
+
+    // --- SELECTIVE RETRANSMIT (ARQ) ---
+    document.getElementById('btnRetransmit').addEventListener('click', async () => {
+      if (!selectedFile) {
+        alert('请先选择文件！');
+        return;
+      }
+      const chunkSize = parseInt(document.getElementById('chunkSizeSelect').value);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const inputVal = document.getElementById('retransmitInput').value;
+      const targetIndices = parseChunkNumbersInput(inputVal, totalChunks);
+      if (targetIndices.length === 0) {
+        alert('未检测到有效分卷序号，请输入 1 ~ ' + totalChunks + ' 之间的分卷序号 (如: 154 或 5, 12, 154)');
+        return;
+      }
+
+      const ac = getAudioContext();
+      const sampleRate = ac.sampleRate;
+      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const useFEC = document.getElementById('fecSelect').value === 'hamming';
+      const markFreq = parseFloat(markFreqEl.value);
+      const spaceFreq = parseFloat(spaceFreqEl.value);
+      const amplitude = parseFloat(volEl.value) / 100;
+
+      const packets = [];
+      for (const c of targetIndices) {
+        const slice = selectedFile.data.subarray(c * chunkSize, Math.min(selectedFile.size, (c + 1) * chunkSize));
+        const chunkPayload = new Uint8Array(4 + slice.length);
+        chunkPayload[0] = (c >> 8) & 0xff;
+        chunkPayload[1] = c & 0xff;
+        chunkPayload[2] = (totalChunks >> 8) & 0xff;
+        chunkPayload[3] = totalChunks & 0xff;
+        chunkPayload.set(slice, 4);
+
+        packets.push({
+          type: PacketType.FILE_DATA,
+          payload: chunkPayload,
+          desc: '重传分卷 [' + (c + 1) + '/' + totalChunks + ']'
+        });
+      }
+
+      isCancelled = false;
+      document.getElementById('fileProgressCard').style.display = 'block';
+      document.getElementById('btnStop').style.display = 'block';
+
+      for (let i = 0; i < packets.length; i++) {
+        if (isCancelled) break;
+        const pkt = packets[i];
+        const percent = Math.round(((i + 1) / packets.length) * 100);
+
+        document.getElementById('fileProgressDesc').textContent = '正在发送 ' + pkt.desc;
+        document.getElementById('fileProgressPercent').textContent = percent + '%';
+        document.getElementById('fileProgressBar').style.width = percent + '%';
+
+        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type);
+        const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+
+        drawWaveform(samples);
+        const durationSec = (samples.length / sampleRate).toFixed(2);
+        document.getElementById('statFrameDuration').textContent = '[重传 ' + (i + 1) + '/' + packets.length + '] ' + durationSec + 's';
+        document.getElementById('txStatus').textContent = '正在重传: ' + pkt.desc;
+
+        await playAudioSamples(samples, sampleRate);
+
+        txPacketsCount++;
+        txBytesCount += pkt.payload.length;
+        packetSeq++;
+        document.getElementById('statTxPackets').textContent = txPacketsCount;
+        document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
+
+        if (i < packets.length - 1 && !isCancelled) {
+          await new Promise(r => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+        }
+      }
+
+      document.getElementById('btnStop').style.display = 'none';
+      if (!isCancelled) {
+        document.getElementById('txStatus').textContent = '✓ 已完成 ' + packets.length + ' 个分卷的重传！';
+        document.getElementById('txStatus').style.color = '#10b981';
+      }
+    });
+
+    // --- BREAKPOINT RESUME ---
+    document.getElementById('btnResume').addEventListener('click', async () => {
+      if (!selectedFile) {
+        alert('请先选择文件！');
+        return;
+      }
+      const chunkSize = parseInt(document.getElementById('chunkSizeSelect').value);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const start1Based = parseInt(document.getElementById('resumeStartInput').value) || 1;
+      const startIdx = Math.max(0, Math.min(totalChunks - 1, start1Based - 1));
+
+      const ac = getAudioContext();
+      const sampleRate = ac.sampleRate;
+      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const useFEC = document.getElementById('fecSelect').value === 'hamming';
+      const markFreq = parseFloat(markFreqEl.value);
+      const spaceFreq = parseFloat(spaceFreqEl.value);
+      const amplitude = parseFloat(volEl.value) / 100;
+
+      const packets = [];
+      for (let c = startIdx; c < totalChunks; c++) {
+        const slice = selectedFile.data.subarray(c * chunkSize, Math.min(selectedFile.size, (c + 1) * chunkSize));
+        const chunkPayload = new Uint8Array(4 + slice.length);
+        chunkPayload[0] = (c >> 8) & 0xff;
+        chunkPayload[1] = c & 0xff;
+        chunkPayload[2] = (totalChunks >> 8) & 0xff;
+        chunkPayload[3] = totalChunks & 0xff;
+        chunkPayload.set(slice, 4);
+
+        packets.push({
+          type: PacketType.FILE_DATA,
+          payload: chunkPayload,
+          desc: '续传分卷 [' + (c + 1) + '/' + totalChunks + ']'
+        });
+      }
+
+      // FILE_END
+      const endJson = JSON.stringify({ name: selectedFile.name, size: selectedFile.size, crc: computeCrc16(selectedFile.data) });
+      packets.push({
+        type: PacketType.FILE_END,
+        payload: new TextEncoder().encode(endJson),
+        desc: '结束帧: ' + selectedFile.name
+      });
+
+      isCancelled = false;
+      document.getElementById('fileProgressCard').style.display = 'block';
+      document.getElementById('btnStop').style.display = 'block';
+
+      for (let i = 0; i < packets.length; i++) {
+        if (isCancelled) break;
+        const pkt = packets[i];
+        const percent = Math.round(((i + 1) / packets.length) * 100);
+
+        document.getElementById('fileProgressDesc').textContent = '正在发送 ' + pkt.desc;
+        document.getElementById('fileProgressPercent').textContent = percent + '%';
+        document.getElementById('fileProgressBar').style.width = percent + '%';
+
+        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type);
+        const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+
+        drawWaveform(samples);
+        const durationSec = (samples.length / sampleRate).toFixed(2);
+        document.getElementById('statFrameDuration').textContent = '[续传 ' + (i + 1) + '/' + packets.length + '] ' + durationSec + 's';
+        document.getElementById('txStatus').textContent = '正在续传: ' + pkt.desc;
+
+        await playAudioSamples(samples, sampleRate);
+
+        txPacketsCount++;
+        txBytesCount += pkt.payload.length;
+        packetSeq++;
+        document.getElementById('statTxPackets').textContent = txPacketsCount;
+        document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
+
+        if (i < packets.length - 1 && !isCancelled) {
+          await new Promise(r => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+        }
+      }
+
+      document.getElementById('btnStop').style.display = 'none';
+      if (!isCancelled) {
+        document.getElementById('txStatus').textContent = '✓ 从分卷 #' + (startIdx + 1) + ' 续传完成！';
         document.getElementById('txStatus').style.color = '#10b981';
       }
     });

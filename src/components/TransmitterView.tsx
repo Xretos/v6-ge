@@ -27,7 +27,18 @@ import {
   ArrowRight,
   Sparkles
 } from 'lucide-react';
-import { FrameEncoder, FSKModulator, FileChunker, PacketType, DEFAULT_CONFIG, ModemConfig, SPEED_PRESETS, SpeedPreset } from '../dsp/fsk';
+import {
+  FrameEncoder,
+  FSKModulator,
+  FileChunker,
+  CRC16,
+  PacketType,
+  DEFAULT_CONFIG,
+  ModemConfig,
+  SPEED_PRESETS,
+  SpeedPreset,
+  parseChunkNumbersInput
+} from '../dsp/fsk';
 
 interface TransmitterViewProps {
   sampleRate: number;
@@ -50,7 +61,7 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
 
   // File transmission state
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
-  const [chunkSize, setChunkSize] = useState<number>(48);
+  const [chunkSize, setChunkSize] = useState<number>(64);
   const [fileProgress, setFileProgress] = useState<{
     currentChunk: number;
     totalChunks: number;
@@ -60,6 +71,11 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
   const isCancelledRef = useRef<boolean>(false);
   const isPausedRef = useRef<boolean>(false);
   const [isPaused, setIsPaused] = useState(false);
+
+  // Selective Retransmission & Breakpoint Resume state
+  const [retransmitInput, setRetransmitInput] = useState<string>('');
+  const [resumeStartChunk, setResumeStartChunk] = useState<number>(1);
+  const [retransmitNotice, setRetransmitNotice] = useState<string>('');
 
   // Modulation config & Speed Presets
   const [selectedPresetId, setSelectedPresetId] = useState<string>('100');
@@ -402,6 +418,205 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
     if (!isCancelledRef.current) {
       setStatusText(`✓ 文件 ${selectedFile.name} 全部分卷已成功发射完毕！`);
       setFileProgress((prev) => (prev ? { ...prev, percent: 100 } : null));
+    }
+  };
+
+  // --- SELECTIVE RETRANSMISSION (ARQ) ---
+  const handleRetransmitSelected = async () => {
+    if (!selectedFile || selectedFile.data.length === 0) return;
+    const totalChunks = Math.max(1, Math.ceil(selectedFile.data.length / chunkSize));
+    const targetIndices = parseChunkNumbersInput(retransmitInput, totalChunks);
+    if (targetIndices.length === 0) {
+      setRetransmitNotice(`❌ 未检测到有效分卷序号。请输入 1 ~ ${totalChunks} 之间的序号 (如: 154 或 5, 12, 154 或 10-15)`);
+      return;
+    }
+
+    const target1Based = targetIndices.map((i) => i + 1);
+    setRetransmitNotice(`🚀 正在准备重传 ${targetIndices.length} 个分卷: [${target1Based.join(', ')}]`);
+
+    const ctx = getAudioContext();
+    const actualSampleRate = ctx.sampleRate;
+    const config: ModemConfig = {
+      sampleRate: actualSampleRate,
+      baudRate,
+      markFreq,
+      spaceFreq,
+      amplitude: volume / 100,
+      useFEC,
+    };
+
+    const packets = FileChunker.createSelectivePackets(
+      selectedFile.name,
+      selectedFile.data,
+      selectedFile.mime,
+      chunkSize,
+      useFEC,
+      targetIndices,
+      packetSeq
+    );
+
+    isCancelledRef.current = false;
+    isPausedRef.current = false;
+    setIsPaused(false);
+    setIsTransmitting(true);
+
+    for (let i = 0; i < packets.length; i++) {
+      if (isCancelledRef.current) break;
+      while (isPausedRef.current) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (isCancelledRef.current) break;
+      }
+      if (isCancelledRef.current) break;
+
+      const pkt = packets[i];
+      const percent = Math.round(((i + 1) / packets.length) * 100);
+      setFileProgress({
+        currentChunk: i + 1,
+        totalChunks: packets.length,
+        percent,
+        currentPacketDesc: pkt.description,
+      });
+
+      const samples = FSKModulator.modulate(pkt.bits, config);
+      drawWaveform(samples);
+
+      const durSec = (samples.length / actualSampleRate).toFixed(2);
+      setFrameDuration(`[重传 ${i + 1}/${packets.length}] ${pkt.bits.length}b / ${durSec}s`);
+      setStatusText(`正在重传: ${pkt.description}`);
+
+      const buffer = ctx.createBuffer(1, samples.length, actualSampleRate);
+      buffer.getChannelData(0).set(samples);
+
+      await new Promise<void>((resolve) => {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        currentSourceRef.current = source;
+        source.onended = () => resolve();
+        source.start();
+      });
+
+      setSentPackets((prev) => prev + 1);
+      setSentBytes((prev) => prev + pkt.payload.length);
+      setPacketSeq((prev) => prev + 1);
+
+      if (i < packets.length - 1 && !isCancelledRef.current) {
+        await new Promise((r) => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+      }
+    }
+
+    setIsTransmitting(false);
+    if (!isCancelledRef.current) {
+      setStatusText(`✓ 指定 ${packets.length} 个分卷已全部重传发送完毕！`);
+      setRetransmitNotice(`✓ 成功重传发送 ${packets.length} 个分卷，接收端应已补齐洞隙！`);
+    }
+  };
+
+  // --- BREAKPOINT RESUME (CONTINUE FROM CHUNK N) ---
+  const handleResumeFromChunk = async (start1Based: number) => {
+    if (!selectedFile || selectedFile.data.length === 0) return;
+    const totalChunks = Math.max(1, Math.ceil(selectedFile.data.length / chunkSize));
+    const startIdx = Math.max(0, Math.min(totalChunks - 1, start1Based - 1));
+
+    const indices: number[] = [];
+    for (let c = startIdx; c < totalChunks; c++) {
+      indices.push(c);
+    }
+
+    setRetransmitNotice(`⏩ 正在从断点分卷 #${startIdx + 1} 开始续传至末尾 (共 ${indices.length} 卷)...`);
+
+    const ctx = getAudioContext();
+    const actualSampleRate = ctx.sampleRate;
+    const config: ModemConfig = {
+      sampleRate: actualSampleRate,
+      baudRate,
+      markFreq,
+      spaceFreq,
+      amplitude: volume / 100,
+      useFEC,
+    };
+
+    const packets = FileChunker.createSelectivePackets(
+      selectedFile.name,
+      selectedFile.data,
+      selectedFile.mime,
+      chunkSize,
+      useFEC,
+      indices,
+      packetSeq
+    );
+
+    // Append FILE_END packet so receiver finishes cleanly
+    const endMeta = JSON.stringify({
+      name: selectedFile.name,
+      size: selectedFile.data.length,
+      crc: CRC16.compute(selectedFile.data),
+    });
+    const endPayload = new TextEncoder().encode(endMeta);
+    const endBits = FrameEncoder.encodePacketToBits(endPayload, (packetSeq + packets.length) & 0xff, useFEC, PacketType.FILE_END);
+    packets.push({
+      seq: (packetSeq + packets.length) & 0xff,
+      chunkIdx: totalChunks,
+      packetType: PacketType.FILE_END,
+      bits: endBits,
+      description: `文件传输结束标记: ${selectedFile.name}`,
+      payload: endPayload,
+    });
+
+    isCancelledRef.current = false;
+    isPausedRef.current = false;
+    setIsPaused(false);
+    setIsTransmitting(true);
+
+    for (let i = 0; i < packets.length; i++) {
+      if (isCancelledRef.current) break;
+      while (isPausedRef.current) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (isCancelledRef.current) break;
+      }
+      if (isCancelledRef.current) break;
+
+      const pkt = packets[i];
+      const percent = Math.round(((i + 1) / packets.length) * 100);
+      setFileProgress({
+        currentChunk: i + 1,
+        totalChunks: packets.length,
+        percent,
+        currentPacketDesc: pkt.description,
+      });
+
+      const samples = FSKModulator.modulate(pkt.bits, config);
+      drawWaveform(samples);
+
+      const durSec = (samples.length / actualSampleRate).toFixed(2);
+      setFrameDuration(`[续传 ${i + 1}/${packets.length}] ${pkt.bits.length}b / ${durSec}s`);
+      setStatusText(`正在续传: ${pkt.description}`);
+
+      const buffer = ctx.createBuffer(1, samples.length, actualSampleRate);
+      buffer.getChannelData(0).set(samples);
+
+      await new Promise<void>((resolve) => {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        currentSourceRef.current = source;
+        source.onended = () => resolve();
+        source.start();
+      });
+
+      setSentPackets((prev) => prev + 1);
+      setSentBytes((prev) => prev + pkt.payload.length);
+      setPacketSeq((prev) => prev + 1);
+
+      if (i < packets.length - 1 && !isCancelledRef.current) {
+        await new Promise((r) => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+      }
+    }
+
+    setIsTransmitting(false);
+    if (!isCancelledRef.current) {
+      setStatusText(`✓ 从断点 #${startIdx + 1} 续传已完成！`);
+      setRetransmitNotice(`✓ 断点续传完毕，接收端已接收至末尾！`);
     }
   };
 
@@ -919,6 +1134,89 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
                             <span>中止</span>
                           </button>
                         </>
+                      )}
+                    </div>
+
+                    {/* SELECTIVE RETRANSMISSION & BREAKPOINT RESUME CONTROLS */}
+                    <div className="pt-3 border-t border-slate-800/80 space-y-3">
+                      {/* 1. Selective Retransmission */}
+                      <div className="bg-slate-900/90 border border-cyan-900/40 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-cyan-300 flex items-center gap-1.5">
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>批量输入包序号 · 选择性重传 (ARQ)</span>
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            从接收端复制缺失分卷直接粘贴
+                          </span>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={retransmitInput}
+                            onChange={(e) => setRetransmitInput(e.target.value)}
+                            disabled={isTransmitting}
+                            placeholder="输入包序号，如: 154 或 5, 12, 154 或 10-15"
+                            className="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-400 disabled:opacity-50"
+                          />
+                          <button
+                            type="button"
+                            disabled={isTransmitting || !retransmitInput.trim()}
+                            onClick={handleRetransmitSelected}
+                            className="bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold px-3 py-1.5 rounded text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-40"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>仅重传指定分卷</span>
+                          </button>
+                        </div>
+
+                        <p className="text-[11px] text-slate-400">
+                          💡 说明：当接收端出现极个别 CRC 丢包时（如分卷 #154 校验失败），无需重新发送整个文件，直接在此输入序号重传该分卷即可补全文件。
+                        </p>
+                      </div>
+
+                      {/* 2. Breakpoint Resume */}
+                      <div className="bg-slate-900/90 border border-emerald-900/40 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
+                            <Play className="w-3.5 h-3.5" />
+                            <span>断点续传功能 (Resume Transfer)</span>
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            分卷范围 1 ~ {Math.max(1, Math.ceil(selectedFile.size / chunkSize))}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-300 whitespace-nowrap">从第</span>
+                          <input
+                            type="number"
+                            min="1"
+                            max={Math.max(1, Math.ceil(selectedFile.size / chunkSize))}
+                            value={resumeStartChunk}
+                            onChange={(e) => setResumeStartChunk(Math.max(1, Number(e.target.value)))}
+                            disabled={isTransmitting}
+                            className="w-20 bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-white font-mono focus:outline-none focus:border-emerald-400 disabled:opacity-50"
+                          />
+                          <span className="text-xs text-slate-300 whitespace-nowrap">卷开始续传至末尾</span>
+
+                          <button
+                            type="button"
+                            disabled={isTransmitting}
+                            onClick={() => handleResumeFromChunk(resumeStartChunk)}
+                            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-3 py-1.5 rounded text-xs flex items-center justify-center gap-1 transition cursor-pointer disabled:opacity-40"
+                          >
+                            <Play className="w-3 h-3" />
+                            <span>开始断点续传</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {retransmitNotice && (
+                        <div className="p-2 rounded bg-cyan-950/60 border border-cyan-800 text-cyan-300 text-xs font-mono">
+                          {retransmitNotice}
+                        </div>
                       )}
                     </div>
                   </div>
