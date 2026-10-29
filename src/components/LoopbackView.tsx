@@ -39,11 +39,14 @@ export const LoopbackView: React.FC<LoopbackViewProps> = ({ sampleRate }) => {
   const runComparisonTest = () => {
     setIsRunning(true);
 
+    const markFreq = baudRate === 2000 ? 2000 : baudRate === 1000 ? 2000 : baudRate === 500 ? 1500 : 1200;
+    const spaceFreq = baudRate === 2000 ? 4000 : baudRate === 1000 ? 3000 : baudRate === 500 ? 2500 : 2200;
+
     const config: ModemConfig = {
       sampleRate,
       baudRate,
-      markFreq: 1200,
-      spaceFreq: 2200,
+      markFreq,
+      spaceFreq,
       amplitude: 0.8,
       useFEC: true,
     };
@@ -226,9 +229,11 @@ export const LoopbackView: React.FC<LoopbackViewProps> = ({ sampleRate }) => {
                   onChange={(e) => setBaudRate(Number(e.target.value))}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
                 >
-                  <option value={100}>100 bps</option>
-                  <option value={150}>150 bps</option>
-                  <option value={200}>200 bps</option>
+                  <option value={100}>100 bps (标准抗噪)</option>
+                  <option value={200}>200 bps (2倍速)</option>
+                  <option value={500}>500 bps (5倍速)</option>
+                  <option value={1000}>1000 bps (⚡ 10倍速 Turbo)</option>
+                  <option value={2000}>2000 bps (🔥 20倍速 Extreme)</option>
                 </select>
               </div>
 

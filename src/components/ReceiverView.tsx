@@ -19,7 +19,8 @@ import {
   FileUp,
   Package,
   Eye,
-  EyeOff
+  EyeOff,
+  Zap
 } from 'lucide-react';
 import {
   FSKDemodulator,
@@ -27,7 +28,8 @@ import {
   FileAssembler,
   AssembledFile,
   FileProgress,
-  PacketType
+  PacketType,
+  SPEED_PRESETS
 } from '../dsp/fsk';
 
 interface ReceiverViewProps {
@@ -37,11 +39,24 @@ interface ReceiverViewProps {
 
 export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheticAudioFeed }) => {
   const [isListening, setIsListening] = useState(false);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>('100');
   const [baudRate, setBaudRate] = useState<number>(100);
+  const [markFreq, setMarkFreq] = useState<number>(1200);
+  const [spaceFreq, setSpaceFreq] = useState<number>(2200);
   const [snrDb, setSnrDb] = useState<number>(0);
   const [rmsDb, setRmsDb] = useState<number>(-96);
   const [isClipping, setIsClipping] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('等待启动耳机孔输入监听...');
+
+  const applySpeedPreset = (presetId: string) => {
+    const preset = SPEED_PRESETS[presetId];
+    if (!preset) return;
+    setSelectedPresetId(presetId);
+    setBaudRate(preset.baudRate);
+    setMarkFreq(preset.markFreq);
+    setSpaceFreq(preset.spaceFreq);
+    setStatusMessage(`已切换解调模式: ${preset.name} (${preset.speedMultiplier}x 加速)`);
+  };
 
   // Packet & Loss Stats
   const [packets, setPackets] = useState<DecodedPacket[]>([]);
@@ -70,8 +85,8 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     const demod = new FSKDemodulator({
       sampleRate,
       baudRate,
-      markFreq: 1200,
-      spaceFreq: 2200,
+      markFreq,
+      spaceFreq,
       useFEC: true,
     });
 
@@ -98,7 +113,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     };
 
     fileAssemblerRef.current = assembler;
-  }, [sampleRate, baudRate]);
+  }, [sampleRate, baudRate, markFreq, spaceFreq]);
 
   const handleNewPacket = useCallback((pkt: DecodedPacket) => {
     setPackets((prev) => [pkt, ...prev.slice(0, 49)]);
@@ -178,21 +193,30 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
       specCtx.fillStyle = '#070a12';
       specCtx.fillRect(0, 0, sWidth, sHeight);
 
-      const barWidth = (sWidth / (freqData.length / 2)) * 1.5;
+      const binHz = (sampleRate || 48000) / 1024;
+      const markBin = Math.round(markFreq / binHz);
+      const spaceBin = Math.round(spaceFreq / binHz);
+
+      const totalBins = Math.floor(freqData.length / 2);
+      const barWidth = (sWidth / totalBins) * 1.5;
       let barX = 0;
-      for (let i = 0; i < freqData.length / 2; i++) {
+      for (let i = 0; i < totalBins; i++) {
         const barHeight = (freqData[i] / 255) * sHeight;
-        const isMarkSpaceBin = (i >= 20 && i <= 30) || (i >= 42 && i <= 54);
-        specCtx.fillStyle = isMarkSpaceBin ? '#06b6d4' : '#1e293b';
+        const isMark = Math.abs(i - markBin) <= 3;
+        const isSpace = Math.abs(i - spaceBin) <= 3;
+        specCtx.fillStyle = isMark ? '#06b6d4' : isSpace ? '#10b981' : '#1e293b';
         specCtx.fillRect(barX, sHeight - barHeight, barWidth - 1, barHeight);
         barX += barWidth;
       }
 
-      // Mark and Space labels
+      // Dynamic Mark and Space labels
+      const markX = Math.min(sWidth - 90, Math.max(10, (markBin / totalBins) * sWidth - 25));
+      const spaceX = Math.min(sWidth - 90, Math.max(10, (spaceBin / totalBins) * sWidth - 25));
       specCtx.fillStyle = '#38bdf8';
       specCtx.font = '10px monospace';
-      specCtx.fillText('1200Hz(M)', sWidth * 0.22, 14);
-      specCtx.fillText('2200Hz(S)', sWidth * 0.46, 14);
+      specCtx.fillText(`${markFreq}Hz(M)`, markX, 14);
+      specCtx.fillStyle = '#34d399';
+      specCtx.fillText(`${spaceFreq}Hz(S)`, spaceX, 14);
 
       // RMS meter update
       let sum = 0;
@@ -352,22 +376,74 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Speed Presets */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>匹配发送端速率预设 (Speed Presets):</span>
+                </span>
+                <span className="text-[11px] text-emerald-400 font-mono">
+                  当前: {SPEED_PRESETS[selectedPresetId]?.speedMultiplier || 1}x 速
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {Object.values(SPEED_PRESETS).map((p) => {
+                  const isActive = baudRate === p.baudRate && markFreq === p.markFreq && spaceFreq === p.spaceFreq;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={isListening}
+                      onClick={() => applySpeedPreset(p.id)}
+                      className={`p-2.5 rounded-lg border text-left transition cursor-pointer disabled:opacity-50 ${
+                        isActive
+                          ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-sm shadow-emerald-500/20'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-white">{p.baudRate} bps</span>
+                        <span className={`text-[10px] font-mono px-1 rounded ${
+                          p.speedMultiplier >= 10 ? 'bg-amber-950 text-amber-400 border border-amber-800' : 'bg-slate-900 text-slate-400'
+                        }`}>
+                          {p.speedMultiplier}x
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                        {p.id === '1000' ? '10倍极速 Turbo' : p.id === '2000' ? '20倍超频' : p.id === '500' ? '5倍平稳' : '1x 标准抗噪'}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
                   解调目标波特率 (Baud Rate)
                 </label>
                 <select
                   value={baudRate}
-                  onChange={(e) => setBaudRate(Number(e.target.value))}
+                  onChange={(e) => {
+                    const b = Number(e.target.value);
+                    setBaudRate(b);
+                    if (b === 1000) { setMarkFreq(2000); setSpaceFreq(3000); }
+                    else if (b === 2000) { setMarkFreq(2000); setSpaceFreq(4000); }
+                    else if (b === 500) { setMarkFreq(1500); setSpaceFreq(2500); }
+                    else if (b === 100) { setMarkFreq(1200); setSpaceFreq(2200); }
+                  }}
                   disabled={isListening}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 disabled:opacity-60"
                 >
-                  <option value={100}>100 bps (标准强抗噪)</option>
-                  <option value={150}>150 bps (均衡)</option>
-                  <option value={200}>200 bps (高速)</option>
-                  <option value={300}>300 bps (极速)</option>
+                  <option value={100}>100 bps (标准强抗噪，Mark 1200 / Space 2200)</option>
+                  <option value={200}>200 bps (2倍速轻度加速)</option>
+                  <option value={500}>500 bps (5倍速平稳加速，Mark 1500 / Space 2500)</option>
+                  <option value={1000}>1000 bps (⚡ 10倍速 Turbo 极速，Mark 2000 / Space 3000)</option>
+                  <option value={2000}>2000 bps (🔥 20倍速 Extreme 超频，Mark 2000 / Space 4000)</option>
                 </select>
+                <p className="text-[11px] text-slate-500 mt-1">必须与发送端波特率与频点保持一致</p>
               </div>
 
               <div>

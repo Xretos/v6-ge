@@ -139,6 +139,75 @@ export const DEFAULT_CONFIG: ModemConfig = {
   useFEC: true,
 };
 
+export interface SpeedPreset {
+  id: string;
+  name: string;
+  baudRate: number;
+  markFreq: number;
+  spaceFreq: number;
+  recommendedChunkSize: number;
+  recommendedUseFEC: boolean;
+  speedMultiplier: number;
+  description: string;
+  throughputDesc: string;
+  est500kDuration: string;
+}
+
+export const SPEED_PRESETS: Record<string, SpeedPreset> = {
+  '100': {
+    id: '100',
+    name: '100 bps (标准抗噪模式)',
+    baudRate: 100,
+    markFreq: 1200,
+    spaceFreq: 2200,
+    recommendedChunkSize: 48,
+    recommendedUseFEC: true,
+    speedMultiplier: 1,
+    description: 'Bell 202 兼容，抗干扰极强，适合恶劣模拟链路或劣质音频线',
+    throughputDesc: '有效 ~7.1 字节/秒 (含FEC)',
+    est500kDuration: '约 19.9 小时 (纯数据理论 ~11.4 小时)',
+  },
+  '500': {
+    id: '500',
+    name: '500 bps (5倍速 平稳加速)',
+    baudRate: 500,
+    markFreq: 1500,
+    spaceFreq: 2500,
+    recommendedChunkSize: 96,
+    recommendedUseFEC: true,
+    speedMultiplier: 5,
+    description: '平稳加速，适合普通 3.5mm 对录线与各类安卓手机',
+    throughputDesc: '有效 ~35 字节/秒 (含FEC) / ~62 字节/秒 (纯CRC)',
+    est500kDuration: '约 2.3 小时 (纯CRC模式)',
+  },
+  '1000': {
+    id: '1000',
+    name: '1000 bps (10倍速 极速 Turbo)',
+    baudRate: 1000,
+    markFreq: 2000,
+    spaceFreq: 3000,
+    recommendedChunkSize: 192,
+    recommendedUseFEC: false, // On 3.5mm cable SNR>30dB, pure CRC provides 100% throughput!
+    speedMultiplier: 10,
+    description: '精准正交 MSK/CPFSK 调制 (Δf=1000Hz=1/Ts)，对录线零串扰黄金频段',
+    throughputDesc: '有效 ~118 字节/秒 (纯CRC) / ~71 字节/秒 (含FEC)',
+    est500kDuration: '约 72 分钟 (纯CRC模式)',
+  },
+  '2000': {
+    id: '2000',
+    name: '2000 bps (20倍速 超频 Extreme)',
+    baudRate: 2000,
+    markFreq: 2000,
+    spaceFreq: 4000,
+    recommendedChunkSize: 220,
+    recommendedUseFEC: false,
+    speedMultiplier: 20,
+    description: '20倍极致速率，要求高品质金属编织屏蔽对录线及无失真输出',
+    throughputDesc: '有效 ~236 字节/秒 (纯CRC) / ~142 字节/秒 (含FEC)',
+    est500kDuration: '约 36 分钟 (纯CRC模式)',
+  },
+};
+
 export enum PacketType {
   TEXT = 0,
   FILE_START = 1,
@@ -735,9 +804,9 @@ export class FSKDemodulator {
         const bit = discriminator >= 0 ? 1 : 0;
         this.bitBuffer.push(bit);
 
-        // Limit bit buffer length to prevent memory leaks
-        if (this.bitBuffer.length > 2500) {
-          this.bitBuffer.splice(0, 1000);
+        // Limit bit buffer length to prevent memory leaks (retain sufficient depth for large frames up to 256 bytes with FEC)
+        if (this.bitBuffer.length > 20000) {
+          this.bitBuffer.splice(0, 5000);
         }
       }
 
@@ -818,8 +887,8 @@ export class FSKDemodulator {
       const [seq, payloadLen, flags] = headerBytes;
       const useFEC = (flags & 0x01) === 0x01;
 
-      // Validate header sanity
-      if (payloadLen > 128) {
+      // Validate header sanity (support chunk payloads up to 240 bytes)
+      if (payloadLen > 250) {
         // False positive sync word or corrupted length! Skip 1 bit and keep searching
         i++;
         continue;

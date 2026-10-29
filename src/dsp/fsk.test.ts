@@ -195,3 +195,96 @@ test('FileTransfer: chunking, FSK modulation, streaming demodulation and assembl
   assert.equal(reconstructedText, fileContent);
 });
 
+test('10x Turbo Mode: 1000 bps CPFSK orthogonal modulation and demodulation (2000Hz / 3000Hz)', () => {
+  const message = 'TURBO-1000BPS-TEST';
+  const payload = new TextEncoder().encode(message);
+  const config = {
+    sampleRate: 48000,
+    baudRate: 1000, // 10x speedup
+    markFreq: 2000,
+    spaceFreq: 3000,
+    amplitude: 0.8,
+    useFEC: false, // Pure CRC on clean 3.5mm line
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 99, false);
+  const audioSamples = FSKModulator.modulate(bits, config);
+
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audioSamples);
+
+  assert.equal(packets.length, 1, 'Should decode packet at 1000 bps');
+  assert.equal(packets[0].seq, 99);
+  assert.equal(packets[0].crcValid, true);
+  assert.equal(packets[0].text, message);
+});
+
+test('10x Turbo File Transfer with 128-byte large chunks at 1000 bps', () => {
+  const filename = 'large_telemetry.csv';
+  const csvData = 'id,timestamp,voltage,current,temperature,status\n' +
+    '1,1700000000,3.31,0.045,28.4,NORMAL\n' +
+    '2,1700000001,3.30,0.046,28.5,NORMAL\n' +
+    '3,1700000002,3.32,0.044,28.6,NORMAL\n' +
+    '4,1700000003,3.29,0.047,28.7,NORMAL\n' +
+    '5,1700000004,3.31,0.045,28.5,NORMAL\n';
+  const fileBytes = new TextEncoder().encode(csvData);
+  const config = {
+    sampleRate: 48000,
+    baudRate: 1000,
+    markFreq: 2000,
+    spaceFreq: 3000,
+    amplitude: 0.8,
+    useFEC: false,
+  };
+
+  // Chunk with 128 bytes
+  const filePackets = FileChunker.createFilePackets(filename, fileBytes, 'text/csv', 128, false, 1);
+  assert.ok(filePackets.length >= 3);
+
+  const demodulator = new FSKDemodulator(config);
+  const assembler = new FileAssembler();
+  let completedFile: any = null;
+  assembler.onComplete = (f) => { completedFile = f; };
+
+  for (const p of filePackets) {
+    const audio = FSKModulator.modulate(p.bits, config);
+    const pkts = demodulator.processAudioBuffer(audio);
+    for (const pkt of pkts) {
+      assembler.processPacket(pkt);
+    }
+  }
+
+  assert.ok(completedFile !== null);
+  assert.equal(completedFile.name, filename);
+  assert.equal(completedFile.size, fileBytes.length);
+  assert.equal(completedFile.crcValid, true);
+  const reconstructed = new TextDecoder('utf-8').decode(completedFile.data);
+  assert.equal(reconstructed, csvData);
+});
+
+test('20x Extreme Mode: 2000 bps CPFSK orthogonal modulation and demodulation (2000Hz / 4000Hz)', () => {
+  const message = 'EXTREME-2000BPS';
+  const payload = new TextEncoder().encode(message);
+  const config = {
+    sampleRate: 48000,
+    baudRate: 2000, // 20x speedup
+    markFreq: 2000,
+    spaceFreq: 4000,
+    amplitude: 0.8,
+    useFEC: false,
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 77, false);
+  const audioSamples = FSKModulator.modulate(bits, config);
+
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audioSamples);
+
+  assert.equal(packets.length, 1, 'Should decode packet at 2000 bps');
+  assert.equal(packets[0].seq, 77);
+  assert.equal(packets[0].crcValid, true);
+  assert.equal(packets[0].text, message);
+});
+
+
+

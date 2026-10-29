@@ -210,17 +210,18 @@
         <div>
           <label for="baudRateSelect">波特率 (Baud / 速率)</label>
           <select id="baudRateSelect">
-            <option value="100" selected>100 bps (超强抗噪，推荐)</option>
-            <option value="150">150 bps (均衡模式)</option>
-            <option value="200">200 bps (高速传输)</option>
-            <option value="300">300 bps (极速短距)</option>
+            <option value="100" selected>100 bps (标准抗噪，Mark 1200 / Space 2200)</option>
+            <option value="200">200 bps (2倍速轻度加速)</option>
+            <option value="500">500 bps (5倍速平稳，Mark 1500 / Space 2500)</option>
+            <option value="1000">1000 bps (⚡ 10倍速 Turbo 极速，Mark 2000 / Space 3000)</option>
+            <option value="2000">2000 bps (🔥 20倍速 Extreme 超频，Mark 2000 / Space 4000)</option>
           </select>
         </div>
         <div>
           <label for="fecSelect">前向纠错 (FEC)</label>
           <select id="fecSelect">
             <option value="hamming" selected>Hamming(7,4) 码 (可纠正1位错)</option>
-            <option value="none">无 FEC (原始数据直通)</option>
+            <option value="none">无 FEC (纯CRC-16 满速直通)</option>
           </select>
         </div>
       </div>
@@ -281,7 +282,7 @@
           <div style="font-size: 1.5rem; margin-bottom: 4px;">📁</div>
           <div id="fileInfoText" style="font-size: 0.9rem; font-weight: 600; color: #fff;">点击选择本地文件</div>
           <div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 4px;">
-            支持 JSON、CSV、TXT、密钥等小型文件 (建议小于 4KB)
+            支持各类数据文件。1000 bps 模式下建议单卷 128/192 字节
           </div>
         </div>
 
@@ -297,8 +298,11 @@
             <label>分卷切片大小 (Chunk Size)</label>
             <select id="chunkSizeSelect">
               <option value="32">32 字节 (超稳小包)</option>
-              <option value="48" selected>48 字节 (推荐标准)</option>
-              <option value="64">64 字节 (大包高速)</option>
+              <option value="48" selected>48 字节 (100 bps 标准)</option>
+              <option value="96">96 字节 (500 bps 推荐)</option>
+              <option value="128">128 字节 (⚡ 1000 bps Turbo 推荐)</option>
+              <option value="192">192 字节 (超大分卷，开销 &lt; 3%)</option>
+              <option value="220">220 字节 (极限容量分卷)</option>
             </select>
           </div>
           <div>
@@ -482,6 +486,32 @@
       const db = (20 * Math.log10(parseFloat(volEl.value) / 100)).toFixed(1);
       document.getElementById('volumeVal').textContent = volEl.value + '% (' + db + ' dB)';
     });
+
+    const baudSelect = document.getElementById('baudRateSelect');
+    baudSelect.addEventListener('change', () => {
+      const b = parseInt(baudSelect.value);
+      if (b === 1000) {
+        markFreqEl.value = 2000;
+        spaceFreqEl.value = 3000;
+        document.getElementById('chunkSizeSelect').value = '128';
+      } else if (b === 2000) {
+        markFreqEl.value = 2000;
+        spaceFreqEl.value = 4000;
+        document.getElementById('chunkSizeSelect').value = '192';
+      } else if (b === 500) {
+        markFreqEl.value = 1500;
+        spaceFreqEl.value = 2500;
+        document.getElementById('chunkSizeSelect').value = '96';
+      } else if (b === 100) {
+        markFreqEl.value = 1200;
+        spaceFreqEl.value = 2200;
+        document.getElementById('chunkSizeSelect').value = '48';
+      }
+      document.getElementById('markFreqVal').textContent = markFreqEl.value + ' Hz';
+      document.getElementById('spaceFreqVal').textContent = spaceFreqEl.value + ' Hz';
+      updateFileEstimate();
+    });
+
     msgInput.addEventListener('input', () => {
       charCountEl.textContent = msgInput.value.length + ' 字符';
     });
@@ -779,9 +809,9 @@
         document.getElementById('statTxPackets').textContent = txPacketsCount;
         document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
 
-        // Guard silence interval
+        // Adaptive guard silence interval (30ms for >=1000bps, 70ms for low baud)
         if (i < packets.length - 1 && !isCancelled) {
-          await new Promise(r => setTimeout(r, 80));
+          await new Promise(r => setTimeout(r, baudRate >= 1000 ? 30 : 70));
         }
       }
 

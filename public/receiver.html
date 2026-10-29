@@ -222,10 +222,11 @@
         <div>
           <label>期望解调波特率</label>
           <select id="rxBaudRate">
-            <option value="100" selected>100 bps (标准)</option>
-            <option value="150">150 bps</option>
-            <option value="200">200 bps</option>
-            <option value="300">300 bps</option>
+            <option value="100" selected>100 bps (标准抗噪，Mark 1200 / Space 2200)</option>
+            <option value="200">200 bps (2倍速轻度加速)</option>
+            <option value="500">500 bps (5倍速平稳，Mark 1500 / Space 2500)</option>
+            <option value="1000">1000 bps (⚡ 10倍速 Turbo 极速，Mark 2000 / Space 3000)</option>
+            <option value="2000">2000 bps (🔥 20倍速 Extreme 超频，Mark 2000 / Space 4000)</option>
           </select>
         </div>
         <div>
@@ -476,8 +477,8 @@
 
           if (prevClock < N / 2 && this.clockPhase >= N / 2) {
             this.bitBuffer.push(discriminator >= 0 ? 1 : 0);
-            if (this.bitBuffer.length > 2500) {
-              this.bitBuffer.splice(0, 1000);
+            if (this.bitBuffer.length > 20000) {
+              this.bitBuffer.splice(0, 5000);
             }
           }
 
@@ -532,7 +533,7 @@
           const useFEC = (flags & 0x01) === 0x01;
           const packetType = (flags >> 1) & 0x07;
 
-          if (payloadLen > 128) {
+          if (payloadLen > 250) {
             i++;
             continue;
           }
@@ -826,7 +827,9 @@
         muteGain.connect(audioCtx.destination);
 
         const baudRate = parseInt(document.getElementById('rxBaudRate').value);
-        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, baudRate, 1200, 2200);
+        const markFreq = baudRate === 2000 ? 2000 : baudRate === 1000 ? 2000 : baudRate === 500 ? 1500 : 1200;
+        const spaceFreq = baudRate === 2000 ? 4000 : baudRate === 1000 ? 3000 : baudRate === 500 ? 2500 : 2200;
+        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, baudRate, markFreq, spaceFreq);
 
         scriptProcessor.onaudioprocess = (e) => {
           const inputData = e.inputBuffer.getChannelData(0);
