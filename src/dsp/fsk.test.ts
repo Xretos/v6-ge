@@ -363,6 +363,101 @@ test('parseChunkNumbersInput: parses single, comma-separated, space-separated, a
   assert.deepEqual(parsedOob, [0]);
 });
 
+test('4-FSK High-Stability Mode: 2000 bps (1000 Baud, 4 tones) with 256-byte large chunks', () => {
+  const payload = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) payload[i] = (i * 37 + 11) & 0xff;
+
+  const config = {
+    sampleRate: 48000,
+    baudRate: 1000, // 1000 Baud * 2 bits = 2000 bps!
+    modulationScheme: '4FSK' as const,
+    markFreq: 3000,
+    spaceFreq: 1000,
+    frequencies: [1000, 2000, 3000, 4000],
+    amplitude: 0.8,
+    useFEC: true,
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 55, true, PacketType.FILE_DATA, '4FSK');
+  const audio = FSKModulator.modulate(bits, config);
+
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audio);
+
+  assert.equal(packets.length, 1, 'Should decode the 256-byte large chunk');
+  assert.equal(packets[0].seq, 55);
+  assert.equal(packets[0].crcValid, true, 'CRC must pass on large 256-byte chunk');
+  assert.equal(packets[0].payload.length, 256);
+  assert.deepEqual(packets[0].payload, payload);
+});
+
+test('4-FSK Turbo Mode: 4000 bps (2000 Baud, 4 tones) Double-Speed Transfer', () => {
+  const message = '4-FSK-4000BPS-DOUBLE-SPEED';
+  const payload = new TextEncoder().encode(message);
+
+  const config = {
+    sampleRate: 48000,
+    baudRate: 2000, // 2000 Baud * 2 bits = 4000 bps!
+    modulationScheme: '4FSK' as const,
+    markFreq: 5000,
+    spaceFreq: 1000,
+    frequencies: [1000, 3000, 5000, 7000],
+    amplitude: 0.85,
+    useFEC: false,
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 102, false, PacketType.TEXT, '4FSK');
+  const audio = FSKModulator.modulate(bits, config);
+
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audio);
+
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0].seq, 102);
+  assert.equal(packets[0].crcValid, true);
+  assert.equal(packets[0].text, message);
+});
+
+test('4-FSK 2000 bps: Multi-Chunk File Transfer with 384-byte extra-large chunks', () => {
+  const filename = 'large_firmware.bin';
+  const fileBytes = new Uint8Array(768); // 2 chunks of 384 bytes
+  for (let i = 0; i < fileBytes.length; i++) fileBytes[i] = (i * 13 + 7) & 0xff;
+
+  const config = {
+    sampleRate: 48000,
+    baudRate: 1000,
+    modulationScheme: '4FSK' as const,
+    markFreq: 3000,
+    spaceFreq: 1000,
+    frequencies: [1000, 2000, 3000, 4000],
+    amplitude: 0.8,
+    useFEC: false,
+  };
+
+  const packets = FileChunker.createFilePackets(filename, fileBytes, 'application/octet-stream', 384, false, 1, '4FSK');
+  assert.equal(packets.length, 4); // START, 2 DATA, END
+
+  const demodulator = new FSKDemodulator(config);
+  const assembler = new FileAssembler();
+  assembler.clearStorage();
+  let completedFile: any = null;
+  assembler.onComplete = (f) => { completedFile = f; };
+
+  for (const p of packets) {
+    const audio = FSKModulator.modulate(p.bits, config);
+    const rxPkts = demodulator.processAudioBuffer(audio);
+    for (const pkt of rxPkts) {
+      assembler.processPacket(pkt);
+    }
+  }
+
+  assert.ok(completedFile !== null, 'File should assemble completely');
+  assert.equal(completedFile.size, fileBytes.length);
+  assert.equal(completedFile.crcValid, true);
+  assert.deepEqual(completedFile.data, fileBytes);
+});
+
+
 
 
 

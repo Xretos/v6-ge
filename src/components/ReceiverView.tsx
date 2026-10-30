@@ -59,6 +59,15 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     setBaudRate(preset.baudRate);
     setMarkFreq(preset.markFreq);
     setSpaceFreq(preset.spaceFreq);
+    if (demodulatorRef.current) {
+      demodulatorRef.current.updateConfig({
+        baudRate: preset.baudRate,
+        markFreq: preset.markFreq,
+        spaceFreq: preset.spaceFreq,
+        modulationScheme: preset.modulationScheme,
+        frequencies: preset.frequencies,
+      });
+    }
     setStatusMessage(`已切换解调模式: ${preset.name} (${preset.speedMultiplier}x 加速)`);
   };
 
@@ -88,11 +97,17 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
   // Initialize demodulator and file assembler
   useEffect(() => {
+    const preset = SPEED_PRESETS[selectedPresetId];
+    const modulationScheme = preset?.modulationScheme || '2FSK';
+    const frequencies = preset?.frequencies;
+
     const demod = new FSKDemodulator({
       sampleRate,
       baudRate,
       markFreq,
       spaceFreq,
+      modulationScheme,
+      frequencies,
       useFEC: true,
     });
 
@@ -422,9 +437,10 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                   当前: {SPEED_PRESETS[selectedPresetId]?.speedMultiplier || 1}x 速
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {Object.values(SPEED_PRESETS).map((p) => {
-                  const isActive = baudRate === p.baudRate && markFreq === p.markFreq && spaceFreq === p.spaceFreq;
+                  const isActive = selectedPresetId === p.id;
+                  const is4FSK = p.modulationScheme === '4FSK';
                   return (
                     <button
                       key={p.id}
@@ -438,15 +454,32 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white">{p.baudRate} bps</span>
+                        <span className="text-xs font-bold text-white flex items-center gap-1">
+                          {p.bitRate} bps
+                          {is4FSK && (
+                            <span className="text-[9px] px-1 bg-cyan-950 text-cyan-300 border border-cyan-800 rounded font-normal">
+                              4-FSK
+                            </span>
+                          )}
+                        </span>
                         <span className={`text-[10px] font-mono px-1 rounded ${
-                          p.speedMultiplier >= 10 ? 'bg-amber-950 text-amber-400 border border-amber-800' : 'bg-slate-900 text-slate-400'
+                          p.speedMultiplier >= 20 ? 'bg-amber-950 text-amber-400 border border-amber-800' : 'bg-slate-900 text-slate-400'
                         }`}>
                           {p.speedMultiplier}x
                         </span>
                       </div>
-                      <div className="text-[10px] text-slate-400 truncate mt-0.5">
-                        {p.id === '1000' ? '10倍极速 Turbo' : p.id === '2000' ? '20倍超频' : p.id === '500' ? '5倍平稳' : '1x 标准抗噪'}
+                      <div className="text-[10px] text-slate-400 truncate mt-1">
+                        {p.id === '2000_4fsk'
+                          ? '⚡ 4-FSK 推荐 0丢包'
+                          : p.id === '4000'
+                          ? '🔥 4000bps 极速'
+                          : p.id === '1000'
+                          ? '10倍极速 Turbo'
+                          : p.id === '2000_2fsk'
+                          ? '20倍 2-FSK超频'
+                          : p.id === '500'
+                          ? '5倍平稳'
+                          : '1x 标准抗噪'}
                       </div>
                     </button>
                   );

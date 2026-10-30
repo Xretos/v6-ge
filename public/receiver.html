@@ -220,13 +220,14 @@
 
       <div class="grid-2">
         <div>
-          <label>期望解调波特率</label>
+          <label>期望解调速率与调制体制</label>
           <select id="rxBaudRate">
-            <option value="100" selected>100 bps (标准抗噪，Mark 1200 / Space 2200)</option>
-            <option value="200">200 bps (2倍速轻度加速)</option>
-            <option value="500">500 bps (5倍速平稳，Mark 1500 / Space 2500)</option>
-            <option value="1000">1000 bps (⚡ 10倍速 Turbo 极速，Mark 2000 / Space 3000)</option>
-            <option value="2000">2000 bps (🔥 20倍速 Extreme 超频，Mark 2000 / Space 4000)</option>
+            <option value="100">100 bps (标准抗噪 2-FSK, 1200 / 2200 Hz)</option>
+            <option value="500">500 bps (5倍速平稳 2-FSK, 1500 / 2500 Hz)</option>
+            <option value="1000">1000 bps (⚡ 10倍速 Turbo 2-FSK, 2000 / 3000 Hz)</option>
+            <option value="2000_2fsk">2000 bps (20倍速 2-FSK 经典超频, 2000 / 4000 Hz)</option>
+            <option value="2000_4fsk" selected>2000 bps (⚡ 4-FSK 高稳推荐 · 1000 Baud, 1k/2k/3k/4kHz)</option>
+            <option value="4000">4000 bps (🔥 4-FSK 翻倍极速 · 2000 Baud, 1k/3k/5k/7kHz)</option>
           </select>
         </div>
         <div>
@@ -418,14 +419,23 @@
       FILE_END: 3
     };
 
-    // Streaming Demodulator with DPLL and AGC Equalizer
+    // Streaming Demodulator with DPLL and Adaptive Equalizer (supports 2-FSK and 4-FSK)
     class StreamingDemodulator {
-      constructor(sampleRate, baudRate, markFreq = 1200, spaceFreq = 2200) {
+      constructor(sampleRate, baudRate, markFreq = 1200, spaceFreq = 2200, scheme = '2FSK', frequencies = null) {
         this.sampleRate = sampleRate;
         this.baudRate = baudRate;
         this.markFreq = markFreq;
         this.spaceFreq = spaceFreq;
+        this.scheme = scheme;
         this.samplesPerSymbol = Math.round(sampleRate / baudRate);
+
+        if (this.scheme === '4FSK') {
+          this.frequencies = frequencies && frequencies.length >= 4
+            ? frequencies
+            : (baudRate >= 2000 ? [1000, 3000, 5000, 7000] : [1000, 2000, 3000, 4000]);
+        } else {
+          this.frequencies = [this.spaceFreq, this.markFreq];
+        }
 
         this.sampleBuffer = [];
         this.bitBuffer = [];
@@ -433,8 +443,25 @@
         this.clockPhase = 0;
         this.clockFreqAdjust = 0; // Second-order loop integrator for crystal drift compensation
         this.lastDiscriminator = 0;
-        this.markGain = 1.0;
-        this.spaceGain = 1.0;
+        this.lastWinningTone = -1;
+        this.samplesSinceTrans = 0;
+        this.peakEnergies = new Float32Array(this.frequencies.length).fill(0.001);
+
+        // Precompute quadrature matched filter tables
+        const N = this.samplesPerSymbol;
+        const twoPiOverFs = (2 * Math.PI) / this.sampleRate;
+        this.cosTables = [];
+        this.sinTables = [];
+        for (let m = 0; m < this.frequencies.length; m++) {
+          const cT = new Float32Array(N);
+          const sT = new Float32Array(N);
+          for (let n = 0; n < N; n++) {
+            cT[n] = Math.cos(twoPiOverFs * this.frequencies[m] * n);
+            sT[n] = Math.sin(twoPiOverFs * this.frequencies[m] * n);
+          }
+          this.cosTables.push(cT);
+          this.sinTables.push(sT);
+        }
 
         // 12x oversampling for tight phase lock
         this.subSampleStep = Math.max(1, Math.round(this.samplesPerSymbol / 12));
@@ -447,59 +474,96 @@
 
         const N = this.samplesPerSymbol;
         const S = this.subSampleStep;
+        const M = this.frequencies.length;
         let snrSum = 0;
         let snrCount = 0;
 
-        while (this.sampleBuffer.length >= N) {
-          let markI = 0, markQ = 0;
-          let spaceI = 0, spaceQ = 0;
-          const twoPiOverFs = (2 * Math.PI) / this.sampleRate;
+        while (this.sampleBuffer.length >= N + S) {
+          this.samplesSinceTrans += S;
+          const energies = new Float32Array(M);
+          let sumSq = 0;
 
-          for (let n = 0; n < N; n++) {
-            const s = this.sampleBuffer[n];
-            markI += s * Math.cos(twoPiOverFs * this.markFreq * n);
-            markQ += s * Math.sin(twoPiOverFs * this.markFreq * n);
-            spaceI += s * Math.cos(twoPiOverFs * this.spaceFreq * n);
-            spaceQ += s * Math.sin(twoPiOverFs * this.spaceFreq * n);
+          for (let m = 0; m < M; m++) {
+            let I = 0, Q = 0;
+            const cT = this.cosTables[m];
+            const sT = this.sinTables[m];
+            for (let n = 0; n < N; n++) {
+              const s = this.sampleBuffer[n];
+              if (m === 0) sumSq += s * s;
+              I += s * cT[n];
+              Q += s * sT[n];
+            }
+            energies[m] = (I * I + Q * Q) / (N * N);
           }
 
-          const rawMarkEnergy = (markI * markI + markQ * markQ) / N;
-          const rawSpaceEnergy = (spaceI * spaceI + spaceQ * spaceQ) / N;
-
-          if (rawMarkEnergy > 0.005) {
-            this.markGain = 0.98 * this.markGain + 0.02 * (1.0 / Math.sqrt(rawMarkEnergy));
+          const rms = Math.sqrt(sumSq / N);
+          if (rms < 0.004) {
+            for (let m = 0; m < M; m++) {
+              this.peakEnergies[m] = Math.max(0.001, this.peakEnergies[m] * 0.99);
+            }
+            this.sampleBuffer.splice(0, S);
+            this.clockPhase = 0;
+            this.lastWinningTone = -1;
+            this.samplesSinceTrans = 0;
+            continue;
           }
-          if (rawSpaceEnergy > 0.005) {
-            this.spaceGain = 0.98 * this.spaceGain + 0.02 * (1.0 / Math.sqrt(rawSpaceEnergy));
+
+          // Dynamic Adaptive Equalizer across all tones
+          let bestTone = 0;
+          let maxNorm = -1;
+          let secondNorm = 0;
+          for (let m = 0; m < M; m++) {
+            this.peakEnergies[m] = Math.max(energies[m], this.peakEnergies[m] * 0.998);
+            const norm = energies[m] / Math.max(1e-6, this.peakEnergies[m]);
+            if (norm > maxNorm) {
+              secondNorm = maxNorm;
+              maxNorm = norm;
+              bestTone = m;
+            } else if (norm > secondNorm) {
+              secondNorm = norm;
+            }
           }
 
-          const markEnergy = rawMarkEnergy * this.markGain;
-          const spaceEnergy = rawSpaceEnergy * this.spaceGain;
-          const discriminator = markEnergy - spaceEnergy;
-
-          const signalE = Math.max(markEnergy, spaceEnergy);
-          const noiseE = Math.min(markEnergy, spaceEnergy) + 1e-6;
-          snrSum += 10 * Math.log10(signalE / noiseE);
+          const localSnr = Math.min(45, Math.max(0, 10 * Math.log10(Math.max(1, maxNorm) / Math.max(1e-6, secondNorm))));
+          snrSum += localSnr;
           snrCount++;
 
-          // Second-order DPLL Zero-Crossing Clock Tracking
-          if ((this.lastDiscriminator < 0 && discriminator >= 0) || (this.lastDiscriminator >= 0 && discriminator < 0)) {
-            const phaseError = this.clockPhase < N / 2 ? this.clockPhase : this.clockPhase - N;
+          // Second-order DPLL clock tracking with transition debouncing
+          let trans = false;
+          if (this.scheme === '2FSK') {
+            const disc = energies[1] / Math.max(1e-6, this.peakEnergies[1]) - energies[0] / Math.max(1e-6, this.peakEnergies[0]);
+            if (this.lastDiscriminator * disc < 0) trans = true;
+            this.lastDiscriminator = disc;
+          } else {
+            if (this.lastWinningTone !== -1 && bestTone !== this.lastWinningTone && this.samplesSinceTrans >= N * 0.5) {
+              trans = true;
+              this.samplesSinceTrans = 0;
+            }
+            this.lastWinningTone = bestTone;
+          }
+
+          if (trans) {
+            let phaseError = this.clockPhase;
+            if (phaseError > N / 2) phaseError -= N;
             this.clockPhase -= phaseError * 0.4;
             this.clockFreqAdjust = Math.max(-1.5, Math.min(1.5, this.clockFreqAdjust - phaseError * 0.02));
-            if (this.clockPhase < 0) this.clockPhase += N;
-            if (this.clockPhase >= N) this.clockPhase -= N;
           }
-          this.lastDiscriminator = discriminator;
 
           const prevClock = this.clockPhase;
           const step = S + (this.clockFreqAdjust * S) / N;
           this.clockPhase += step;
 
           if (prevClock < N / 2 && this.clockPhase >= N / 2) {
-            this.bitBuffer.push(discriminator >= 0 ? 1 : 0);
-            if (this.bitBuffer.length > 20000) {
-              this.bitBuffer.splice(0, 5000);
+            if (this.scheme === '4FSK') {
+              // Gray decode: 0->00, 1->01, 2->11, 3->10
+              const GRAY_TO_BITS_4 = { 0: [0, 0], 1: [0, 1], 2: [1, 1], 3: [1, 0] };
+              const [b0, b1] = GRAY_TO_BITS_4[bestTone] || [0, 0];
+              this.bitBuffer.push(b0, b1);
+            } else {
+              this.bitBuffer.push(bestTone === 1 ? 1 : 0);
+            }
+            if (this.bitBuffer.length > 30000) {
+              this.bitBuffer.splice(0, 8000);
             }
           }
 
@@ -537,11 +601,11 @@
           let cursor = i + 16;
           let fecCorrections = 0;
 
-          // 帧头 3 字节 = 42 bits
-          if (cursor + 42 > this.bitBuffer.length) break;
+          // 帧头 4 字节 [seq, lenHigh, lenLow, flags] = 56 bits
+          if (cursor + 56 > this.bitBuffer.length) break;
 
           const headerBytes = [];
-          for (let b = 0; b < 3; b++) {
+          for (let b = 0; b < 4; b++) {
             let hCode = 0, lCode = 0;
             for (let bit = 0; bit < 7; bit++) hCode = (hCode << 1) | this.bitBuffer[cursor++];
             for (let bit = 0; bit < 7; bit++) lCode = (lCode << 1) | this.bitBuffer[cursor++];
@@ -550,11 +614,12 @@
             fecCorrections += res.corrections;
           }
 
-          const [seq, payloadLen, flags] = headerBytes;
+          const [seq, lenHigh, lenLow, flags] = headerBytes;
+          const payloadLen = (lenHigh << 8) | lenLow;
           const useFEC = (flags & 0x01) === 0x01;
           const packetType = (flags >> 1) & 0x07;
 
-          if (payloadLen > 250) {
+          if (payloadLen > 2048) {
             i++;
             continue;
           }
@@ -596,10 +661,10 @@
           fecCorrections += crcH.corrections + crcL.corrections;
           const receivedCrc = ((crcH.byte & 0xff) << 8) | (crcL.byte & 0xff);
 
-          // 校验 CRC
-          const checkData = new Uint8Array(3 + payload.length);
-          checkData[0] = seq; checkData[1] = payloadLen; checkData[2] = flags;
-          checkData.set(payload, 3);
+          // 校验 CRC: [seq, lenHigh, lenLow, flags, ...payload]
+          const checkData = new Uint8Array(4 + payload.length);
+          checkData[0] = seq; checkData[1] = lenHigh; checkData[2] = lenLow; checkData[3] = flags;
+          checkData.set(payload, 4);
           const expectedCrc = computeCrc16(checkData);
 
           const isValid = (receivedCrc === expectedCrc);
@@ -931,10 +996,36 @@
         scriptProcessor.connect(muteGain);
         muteGain.connect(audioCtx.destination);
 
-        const baudRate = parseInt(document.getElementById('rxBaudRate').value);
-        const markFreq = baudRate === 2000 ? 2000 : baudRate === 1000 ? 2000 : baudRate === 500 ? 1500 : 1200;
-        const spaceFreq = baudRate === 2000 ? 4000 : baudRate === 1000 ? 3000 : baudRate === 500 ? 2500 : 2200;
-        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, baudRate, markFreq, spaceFreq);
+        const rxMode = document.getElementById('rxBaudRate').value;
+        let baudRate = 100, markFreq = 1200, spaceFreq = 2200, scheme = '2FSK', frequencies = null;
+        if (rxMode === '2000_4fsk') {
+          baudRate = 1000;
+          scheme = '4FSK';
+          frequencies = [1000, 2000, 3000, 4000];
+          markFreq = 3000; spaceFreq = 1000;
+        } else if (rxMode === '4000') {
+          baudRate = 2000;
+          scheme = '4FSK';
+          frequencies = [1000, 3000, 5000, 7000];
+          markFreq = 5000; spaceFreq = 1000;
+        } else if (rxMode === '2000_2fsk' || rxMode === '2000') {
+          baudRate = 2000;
+          scheme = '2FSK';
+          markFreq = 2000; spaceFreq = 4000;
+        } else if (rxMode === '1000') {
+          baudRate = 1000;
+          scheme = '2FSK';
+          markFreq = 2000; spaceFreq = 3000;
+        } else if (rxMode === '500') {
+          baudRate = 500;
+          scheme = '2FSK';
+          markFreq = 1500; spaceFreq = 2500;
+        } else {
+          baudRate = 100;
+          scheme = '2FSK';
+          markFreq = 1200; spaceFreq = 2200;
+        }
+        activeDemodulator = new StreamingDemodulator(audioCtx.sampleRate, baudRate, markFreq, spaceFreq, scheme, frequencies);
 
         scriptProcessor.onaudioprocess = (e) => {
           const inputData = e.inputBuffer.getChannelData(0);

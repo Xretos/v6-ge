@@ -124,11 +124,15 @@ export const PREAMBLE_BITS = [
 export const SYNC_WORD = 0xd391; // 16-bit Barker-like sync sequence: 11010011 10010001
 export const SYNC_BITS = [1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1]; // 16 bits
 
+export type ModulationScheme = '2FSK' | '4FSK' | '8FSK';
+
 export interface ModemConfig {
   sampleRate: number;      // e.g. 44100, 48000
-  baudRate: number;        // e.g. 100, 150, 200, 300 baud
+  baudRate: number;        // symbols per second (e.g. 100, 500, 1000, 2000)
   markFreq: number;        // bit '1' frequency (e.g. 1200 Hz)
   spaceFreq: number;       // bit '0' frequency (e.g. 2200 Hz)
+  modulationScheme?: ModulationScheme; // '2FSK' | '4FSK' | '8FSK'
+  frequencies?: number[];  // Specific tone frequencies for M-FSK
   amplitude: number;       // 0.0 - 1.0 (recommended 0.75)
   useFEC: boolean;         // Enable Hamming(7,4) forward error correction
 }
@@ -138,6 +142,7 @@ export const DEFAULT_CONFIG: ModemConfig = {
   baudRate: 100, // 100 bps default, meets >= 100 bps requirement
   markFreq: 1200,
   spaceFreq: 2200,
+  modulationScheme: '2FSK',
   amplitude: 0.75,
   useFEC: true,
 };
@@ -146,8 +151,11 @@ export interface SpeedPreset {
   id: string;
   name: string;
   baudRate: number;
+  modulationScheme: ModulationScheme;
+  bitRate: number;
   markFreq: number;
   spaceFreq: number;
+  frequencies?: number[];
   recommendedChunkSize: number;
   recommendedUseFEC: boolean;
   speedMultiplier: number;
@@ -159,8 +167,10 @@ export interface SpeedPreset {
 export const SPEED_PRESETS: Record<string, SpeedPreset> = {
   '100': {
     id: '100',
-    name: '100 bps (标准抗噪模式)',
+    name: '100 bps (标准抗噪 2-FSK)',
     baudRate: 100,
+    modulationScheme: '2FSK',
+    bitRate: 100,
     markFreq: 1200,
     spaceFreq: 2200,
     recommendedChunkSize: 48,
@@ -172,11 +182,13 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
   },
   '500': {
     id: '500',
-    name: '500 bps (5倍速 平稳加速)',
+    name: '500 bps (5倍速 2-FSK 平稳)',
     baudRate: 500,
+    modulationScheme: '2FSK',
+    bitRate: 500,
     markFreq: 1500,
     spaceFreq: 2500,
-    recommendedChunkSize: 64,
+    recommendedChunkSize: 96,
     recommendedUseFEC: true,
     speedMultiplier: 5,
     description: '平稳加速，适合普通 3.5mm 对录线与各类安卓手机',
@@ -185,31 +197,70 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
   },
   '1000': {
     id: '1000',
-    name: '1000 bps (10倍速 极速 Turbo)',
+    name: '1000 bps (10倍速 2-FSK 极速 Turbo)',
     baudRate: 1000,
+    modulationScheme: '2FSK',
+    bitRate: 1000,
     markFreq: 2000,
     spaceFreq: 3000,
-    recommendedChunkSize: 64, // 64B provides ideal <0.8s packet duration, preventing DAC/ADC crystal drift slips!
-    recommendedUseFEC: false, // On 3.5mm cable SNR>30dB, pure CRC provides 100% throughput!
+    recommendedChunkSize: 128,
+    recommendedUseFEC: false,
     speedMultiplier: 10,
-    description: '精准正交 MSK/CPFSK 调制 (Δf=1000Hz=1/Ts)，推荐64B/96B切片彻底消除时钟漂移',
+    description: '经典正交 MSK 调制 (Δf=1000Hz=1/Ts)，适合低失真对录线',
     throughputDesc: '有效 ~118 字节/秒 (纯CRC) / ~71 字节/秒 (含FEC)',
     est500kDuration: '约 72 分钟 (纯CRC模式)',
   },
-  '2000': {
-    id: '2000',
-    name: '2000 bps (20倍速 超频 Extreme)',
+  '2000_2fsk': {
+    id: '2000_2fsk',
+    name: '2000 bps (20倍速 2-FSK 经典超频)',
     baudRate: 2000,
+    modulationScheme: '2FSK',
+    bitRate: 2000,
     markFreq: 2000,
     spaceFreq: 4000,
-    recommendedChunkSize: 80,
+    recommendedChunkSize: 128,
     recommendedUseFEC: false,
     speedMultiplier: 20,
-    description: '20倍极致速率，要求高品质金属编织屏蔽对录线及无失真输出',
-    throughputDesc: '有效 ~236 字节/秒 (纯CRC) / ~142 字节/秒 (含FEC)',
+    description: '2-FSK 极限，单比特码元仅 0.5ms (24采样点)，大卷易受两机晶振漂移影响',
+    throughputDesc: '有效 ~236 字节/秒 (纯CRC)',
     est500kDuration: '约 36 分钟 (纯CRC模式)',
   },
+  '2000_4fsk': {
+    id: '2000_4fsk',
+    name: '2000 bps (⚡ 4-FSK 高稳大卷模式 · 解决丢包推荐！)',
+    baudRate: 1000,
+    modulationScheme: '4FSK',
+    bitRate: 2000,
+    markFreq: 3000,
+    spaceFreq: 1000,
+    frequencies: [1000, 2000, 3000, 4000],
+    recommendedChunkSize: 256,
+    recommendedUseFEC: true,
+    speedMultiplier: 20,
+    description: '4频点正交4-FSK(1k/2k/3k/4kHz)！码元宽度翻倍至1.0ms(48采样点)，抗时钟漂移能力提升100%，大卷丢包率趋近0%！',
+    throughputDesc: '有效 ~142 字节/秒 (含FEC) / ~236 字节/秒 (纯CRC)',
+    est500kDuration: '约 36 分钟 (超稳传输不丢包)',
+  },
+  '4000': {
+    id: '4000',
+    name: '4000 bps (🔥 4-FSK 翻倍极速 2000 Baud · 4kbps)',
+    baudRate: 2000,
+    modulationScheme: '4FSK',
+    bitRate: 4000,
+    markFreq: 5000,
+    spaceFreq: 1000,
+    frequencies: [1000, 3000, 5000, 7000],
+    recommendedChunkSize: 256,
+    recommendedUseFEC: false,
+    speedMultiplier: 40,
+    description: '4频点2比特正交调制(1k/3k/5k/7kHz)，2000 Baud 输出 4000 bps，传输速度直接翻倍！',
+    throughputDesc: '有效 ~472 字节/秒 (纯CRC) / ~284 字节/秒 (含FEC)',
+    est500kDuration: '约 17.6 分钟 (纯CRC模式)',
+  },
 };
+
+// Legacy compatibility aliases
+SPEED_PRESETS['2000'] = SPEED_PRESETS['2000_4fsk'];
 
 export enum PacketType {
   TEXT = 0,
@@ -254,13 +305,26 @@ export class FrameEncoder {
     payload: Uint8Array,
     seq: number,
     useFEC: boolean,
-    packetType: PacketType = PacketType.TEXT
+    packetType: PacketType = PacketType.TEXT,
+    scheme: ModulationScheme = '2FSK'
   ): number[] {
     const bits: number[] = [];
 
     // 1. Preamble (allows receiver AGC & symbol clock to synchronize)
-    for (const b of PREAMBLE_BITS) {
-      bits.push(b);
+    if (scheme === '4FSK') {
+      // 32 alternating symbols between tone 0 (bits 0,0) and tone 3 (bits 1,0)
+      for (let i = 0; i < 16; i++) {
+        bits.push(0, 0, 1, 0);
+      }
+    } else if (scheme === '8FSK') {
+      // 32 alternating symbols between tone 0 (bits 0,0,0) and tone 7 (bits 1,0,0)
+      for (let i = 0; i < 16; i++) {
+        bits.push(0, 0, 0, 1, 0, 0);
+      }
+    } else {
+      for (const b of PREAMBLE_BITS) {
+        bits.push(b);
+      }
     }
 
     // 2. Sync word
@@ -268,10 +332,12 @@ export class FrameEncoder {
       bits.push(b);
     }
 
-    // 3. Header: [seq (1 byte), len (1 byte), flags (1 byte)]
+    // 3. Header: [seq (1 byte), lenHigh (1 byte), lenLow (1 byte), flags (1 byte)]
     // Flags: bit 0: useFEC, bits 1..3: packetType
     const flags = (useFEC ? 0x01 : 0x00) | ((packetType & 0x07) << 1);
-    const headerBytes = new Uint8Array([seq & 0xff, payload.length & 0xff, flags]);
+    const lenHigh = (payload.length >> 8) & 0xff;
+    const lenLow = payload.length & 0xff;
+    const headerBytes = new Uint8Array([seq & 0xff, lenHigh, lenLow, flags]);
 
     // 4. Checksum data: header + payload
     const dataForCrc = new Uint8Array(headerBytes.length + payload.length);
@@ -331,7 +397,8 @@ export class FileChunker {
     mimeType: string = 'application/octet-stream',
     chunkSize: number = 48,
     useFEC: boolean = true,
-    startSeq: number = 1
+    startSeq: number = 1,
+    scheme: ModulationScheme = '2FSK'
   ): { seq: number; packetType: PacketType; bits: number[]; description: string; payload: Uint8Array }[] {
     const totalChunks = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
     const packets = [];
@@ -345,7 +412,7 @@ export class FileChunker {
       mime: mimeType,
     });
     const metaPayload = new TextEncoder().encode(meta);
-    const startBits = FrameEncoder.encodePacketToBits(metaPayload, curSeq & 0xff, useFEC, PacketType.FILE_START);
+    const startBits = FrameEncoder.encodePacketToBits(metaPayload, curSeq & 0xff, useFEC, PacketType.FILE_START, scheme);
     packets.push({
       seq: curSeq & 0xff,
       packetType: PacketType.FILE_START,
@@ -365,7 +432,7 @@ export class FileChunker {
       chunkPayload[3] = totalChunks & 0xff;
       chunkPayload.set(slice, 4);
 
-      const dataBits = FrameEncoder.encodePacketToBits(chunkPayload, curSeq & 0xff, useFEC, PacketType.FILE_DATA);
+      const dataBits = FrameEncoder.encodePacketToBits(chunkPayload, curSeq & 0xff, useFEC, PacketType.FILE_DATA, scheme);
       packets.push({
         seq: curSeq & 0xff,
         packetType: PacketType.FILE_DATA,
@@ -383,7 +450,7 @@ export class FileChunker {
       crc: CRC16.compute(fileBytes),
     });
     const endPayload = new TextEncoder().encode(endMeta);
-    const endBits = FrameEncoder.encodePacketToBits(endPayload, curSeq & 0xff, useFEC, PacketType.FILE_END);
+    const endBits = FrameEncoder.encodePacketToBits(endPayload, curSeq & 0xff, useFEC, PacketType.FILE_END, scheme);
     packets.push({
       seq: curSeq & 0xff,
       packetType: PacketType.FILE_END,
@@ -406,7 +473,8 @@ export class FileChunker {
     chunkSize: number = 64,
     useFEC: boolean = true,
     chunkIndices: number[] = [],
-    startSeq: number = 1
+    startSeq: number = 1,
+    scheme: ModulationScheme = '2FSK'
   ): { seq: number; chunkIdx: number; packetType: PacketType; bits: number[]; description: string; payload: Uint8Array }[] {
     const totalChunks = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
     const packets = [];
@@ -426,7 +494,7 @@ export class FileChunker {
       chunkPayload[3] = totalChunks & 0xff;
       chunkPayload.set(slice, 4);
 
-      const dataBits = FrameEncoder.encodePacketToBits(chunkPayload, curSeq & 0xff, useFEC, PacketType.FILE_DATA);
+      const dataBits = FrameEncoder.encodePacketToBits(chunkPayload, curSeq & 0xff, useFEC, PacketType.FILE_DATA, scheme);
       packets.push({
         seq: curSeq & 0xff,
         chunkIdx: c,
@@ -799,23 +867,66 @@ export class FileAssembler {
 export class FSKModulator {
   /**
    * Modulates bitstream into continuous-phase FSK Float32Array audio samples.
+   * Supports 2-FSK, 4-FSK (2 bits/symbol), and 8-FSK (3 bits/symbol).
    * Smoothly applies envelope at start and end to eliminate acoustic pop/click.
    */
   static modulate(bits: number[], config: ModemConfig): Float32Array {
-    const { sampleRate, baudRate, markFreq, spaceFreq, amplitude } = config;
+    const { sampleRate, baudRate, amplitude } = config;
+    const scheme: ModulationScheme = config.modulationScheme || '2FSK';
     const samplesPerSymbol = Math.round(sampleRate / baudRate);
-    const totalSamples = bits.length * samplesPerSymbol + Math.round(sampleRate * 0.08); // +80ms lead/trail guard
+
+    let symbols: number[] = [];
+    let freqs: number[] = [];
+
+    if (scheme === '4FSK') {
+      freqs = config.frequencies && config.frequencies.length >= 4
+        ? config.frequencies
+        : (baudRate >= 2000 ? [1000, 3000, 5000, 7000] : [1000, 2000, 3000, 4000]);
+
+      // Gray code mapping for 4-FSK (2 bits -> 1 symbol):
+      // 00 -> 0, 01 -> 1, 11 -> 2, 10 -> 3
+      const gray4: Record<number, number> = { 0b00: 0, 0b01: 1, 0b11: 2, 0b10: 3 };
+      const paddedBits = bits.slice();
+      if (paddedBits.length % 2 !== 0) paddedBits.push(0);
+
+      for (let i = 0; i < paddedBits.length; i += 2) {
+        const val = (paddedBits[i] << 1) | paddedBits[i + 1];
+        symbols.push(gray4[val] ?? 0);
+      }
+    } else if (scheme === '8FSK') {
+      freqs = config.frequencies && config.frequencies.length >= 8
+        ? config.frequencies
+        : [1200, 1600, 2000, 2400, 2800, 3200, 3600, 4000];
+
+      // Gray code mapping for 8-FSK (3 bits -> 1 symbol):
+      const gray8: Record<number, number> = {
+        0b000: 0, 0b001: 1, 0b011: 2, 0b010: 3,
+        0b110: 4, 0b111: 5, 0b101: 6, 0b100: 7,
+      };
+      const paddedBits = bits.slice();
+      while (paddedBits.length % 3 !== 0) paddedBits.push(0);
+
+      for (let i = 0; i < paddedBits.length; i += 3) {
+        const val = (paddedBits[i] << 2) | (paddedBits[i + 1] << 1) | paddedBits[i + 2];
+        symbols.push(gray8[val] ?? 0);
+      }
+    } else {
+      // Standard 2-FSK: 0 -> space, 1 -> mark
+      freqs = [config.spaceFreq, config.markFreq];
+      symbols = bits;
+    }
+
+    const totalSamples = symbols.length * samplesPerSymbol + Math.round(sampleRate * 0.08); // +80ms lead/trail guard
     const output = new Float32Array(totalSamples);
 
     let phase = 0;
     const twoPi = 2 * Math.PI;
     const leadGuardSamples = Math.round(sampleRate * 0.04); // 40ms lead silence
-
     let sampleIdx = leadGuardSamples;
 
-    for (let bitIdx = 0; bitIdx < bits.length; bitIdx++) {
-      const bit = bits[bitIdx];
-      const freq = bit === 1 ? markFreq : spaceFreq;
+    for (let symIdx = 0; symIdx < symbols.length; symIdx++) {
+      const sym = symbols[symIdx];
+      const freq = freqs[sym] ?? freqs[0];
       const phaseIncrement = (twoPi * freq) / sampleRate;
 
       for (let s = 0; s < samplesPerSymbol; s++) {
@@ -849,11 +960,13 @@ export class FSKDemodulator {
   public config: ModemConfig;
   public samplesPerSymbol: number;
 
-  // Quadrature sin/cos reference tables
-  private markCosTable: Float32Array;
-  private markSinTable: Float32Array;
-  private spaceCosTable: Float32Array;
-  private spaceSinTable: Float32Array;
+  // Multi-frequency quadrature reference tables
+  private toneFrequencies: number[] = [];
+  private cosTables: Float32Array[] = [];
+  private sinTables: Float32Array[] = [];
+
+  // Per-tone adaptive equalizer peak energy
+  private peakEnergies: number[] = [];
 
   // Streaming sample buffer (retains unconsumed audio samples across chunk boundaries)
   private sampleBuffer: number[] = [];
@@ -864,11 +977,9 @@ export class FSKDemodulator {
   // Symbol clock recovery & tracking state (Second-order DPLL)
   private clockPhase: number = 0;
   private clockFreqAdjust: number = 0; // Frequency tracking integrator (PPM drift compensation)
+  private lastWinningTone: number = -1;
+  private samplesSinceTrans: number = 0;
   private lastDiscriminator: number = 0;
-
-  // Adaptive channel equalizer (balances 1200Hz vs 2200Hz phone mic gain differences)
-  private maxMarkEnergy: number = 0.001;
-  private maxSpaceEnergy: number = 0.001;
 
   // Callbacks
   private onPacketCallback?: (packet: DecodedPacket) => void;
@@ -877,13 +988,6 @@ export class FSKDemodulator {
   constructor(config: Partial<ModemConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.samplesPerSymbol = Math.round(this.config.sampleRate / this.config.baudRate);
-
-    const N = this.samplesPerSymbol;
-    this.markCosTable = new Float32Array(N);
-    this.markSinTable = new Float32Array(N);
-    this.spaceCosTable = new Float32Array(N);
-    this.spaceSinTable = new Float32Array(N);
-
     this.rebuildTables();
   }
 
@@ -899,25 +1003,48 @@ export class FSKDemodulator {
     this.bitBuffer = [];
     this.clockPhase = 0;
     this.clockFreqAdjust = 0;
+    this.lastWinningTone = -1;
+    this.samplesSinceTrans = 0;
     this.lastDiscriminator = 0;
-    this.maxMarkEnergy = 0.001;
-    this.maxSpaceEnergy = 0.001;
+    if (this.peakEnergies.length > 0) {
+      this.peakEnergies.fill(0.001);
+    }
   }
 
   private rebuildTables() {
-    const { sampleRate, markFreq, spaceFreq } = this.config;
+    const { sampleRate } = this.config;
+    const scheme: ModulationScheme = this.config.modulationScheme || '2FSK';
     const N = this.samplesPerSymbol;
-    this.markCosTable = new Float32Array(N);
-    this.markSinTable = new Float32Array(N);
-    this.spaceCosTable = new Float32Array(N);
-    this.spaceSinTable = new Float32Array(N);
 
-    for (let n = 0; n < N; n++) {
-      const t = n / sampleRate;
-      this.markCosTable[n] = Math.cos(2 * Math.PI * markFreq * t);
-      this.markSinTable[n] = Math.sin(2 * Math.PI * markFreq * t);
-      this.spaceCosTable[n] = Math.cos(2 * Math.PI * spaceFreq * t);
-      this.spaceSinTable[n] = Math.sin(2 * Math.PI * spaceFreq * t);
+    if (scheme === '4FSK') {
+      this.toneFrequencies = this.config.frequencies && this.config.frequencies.length >= 4
+        ? this.config.frequencies
+        : (this.config.baudRate >= 2000 ? [1000, 3000, 5000, 7000] : [1000, 2000, 3000, 4000]);
+    } else if (scheme === '8FSK') {
+      this.toneFrequencies = this.config.frequencies && this.config.frequencies.length >= 8
+        ? this.config.frequencies
+        : [1200, 1600, 2000, 2400, 2800, 3200, 3600, 4000];
+    } else {
+      // 2-FSK: 0 -> Space, 1 -> Mark
+      this.toneFrequencies = [this.config.spaceFreq, this.config.markFreq];
+    }
+
+    const M = this.toneFrequencies.length;
+    this.cosTables = [];
+    this.sinTables = [];
+    this.peakEnergies = new Array(M).fill(0.001);
+
+    for (let m = 0; m < M; m++) {
+      const f = this.toneFrequencies[m];
+      const cosT = new Float32Array(N);
+      const sinT = new Float32Array(N);
+      for (let n = 0; n < N; n++) {
+        const t = n / sampleRate;
+        cosT[n] = Math.cos(2 * Math.PI * f * t);
+        sinT[n] = Math.sin(2 * Math.PI * f * t);
+      }
+      this.cosTables.push(cosT);
+      this.sinTables.push(sinT);
     }
   }
 
@@ -931,19 +1058,20 @@ export class FSKDemodulator {
 
   /**
    * Main entrypoint for streaming audio samples.
-   * Can accept audio of ANY buffer size (e.g. 512, 1024, 2048, 4096 or full buffers).
    * Maintains continuous phase and symbol tracking across chunk calls.
    */
   public processAudioBuffer(incoming: Float32Array): DecodedPacket[] {
     const packets: DecodedPacket[] = [];
     if (!incoming || incoming.length === 0) return packets;
 
-    // Append incoming samples to continuous stream buffer
     for (let i = 0; i < incoming.length; i++) {
       this.sampleBuffer.push(incoming[i]);
     }
 
     const N = this.samplesPerSymbol;
+    const M = this.toneFrequencies.length;
+    const scheme: ModulationScheme = this.config.modulationScheme || '2FSK';
+
     // Step stride: evaluate discriminator every S samples (12x oversampling for tight symbol phase sync)
     const S = Math.max(1, Math.floor(N / 12));
 
@@ -953,70 +1081,89 @@ export class FSKDemodulator {
 
     // Sliding window matched filter
     while (this.sampleBuffer.length >= N + S) {
-      // Calculate matched filter correlation over window [0 .. N-1]
-      let markI = 0, markQ = 0;
-      let spaceI = 0, spaceQ = 0;
+      this.samplesSinceTrans += S;
+      const energies = new Float32Array(M);
+      let totalCarrierEnergy = 0;
       let sumSq = 0;
 
-      for (let n = 0; n < N; n++) {
-        const s = this.sampleBuffer[n];
-        sumSq += s * s;
-        markI += s * this.markCosTable[n];
-        markQ += s * this.markSinTable[n];
-        spaceI += s * this.spaceCosTable[n];
-        spaceQ += s * this.spaceSinTable[n];
+      for (let m = 0; m < M; m++) {
+        let I = 0, Q = 0;
+        const cT = this.cosTables[m];
+        const sT = this.sinTables[m];
+        for (let n = 0; n < N; n++) {
+          const s = this.sampleBuffer[n];
+          if (m === 0) sumSq += s * s;
+          I += s * cT[n];
+          Q += s * sT[n];
+        }
+        const e = (I * I + Q * Q) / (N * N);
+        energies[m] = e;
+        totalCarrierEnergy += e;
       }
 
       const rms = Math.sqrt(sumSq / N);
-      const markE = (markI * markI + markQ * markQ) / (N * N);
-      const spaceE = (spaceI * spaceI + spaceQ * spaceQ) / (N * N);
-      const totalCarrierEnergy = markE + spaceE;
 
       // Squelch threshold: if audio level is too quiet (< -40 dBFS), skip bit decisions
       if (rms < 0.004 || totalCarrierEnergy < 1e-7) {
-        // In silence, slowly decay equalizer references
-        this.maxMarkEnergy = Math.max(0.001, this.maxMarkEnergy * 0.99);
-        this.maxSpaceEnergy = Math.max(0.001, this.maxSpaceEnergy * 0.99);
-
-        // Advance sample buffer by S
+        for (let m = 0; m < M; m++) {
+          this.peakEnergies[m] = Math.max(0.001, this.peakEnergies[m] * 0.99);
+        }
         this.sampleBuffer.splice(0, S);
         processedSamples += S;
         this.clockPhase = 0;
+        this.lastWinningTone = -1;
+        this.samplesSinceTrans = 0;
         continue;
       }
 
-      // Dynamic Equalization: phone microphones have high-frequency roll-off (2200Hz is attenuated compared to 1200Hz)
-      // Track peak energies and normalize
-      this.maxMarkEnergy = Math.max(markE, this.maxMarkEnergy * 0.998);
-      this.maxSpaceEnergy = Math.max(spaceE, this.maxSpaceEnergy * 0.998);
+      // Dynamic Equalization across all M tones
+      let bestTone = 0;
+      let maxNormEnergy = -1;
+      let secondBestNormEnergy = 0;
 
-      const normMarkE = markE / Math.max(1e-6, this.maxMarkEnergy);
-      const normSpaceE = spaceE / Math.max(1e-6, this.maxSpaceEnergy);
-
-      // Discriminator metric: >0 = Mark (1), <0 = Space (0)
-      const discriminator = normMarkE - normSpaceE;
+      for (let m = 0; m < M; m++) {
+        this.peakEnergies[m] = Math.max(energies[m], this.peakEnergies[m] * 0.998);
+        const normE = energies[m] / Math.max(1e-6, this.peakEnergies[m]);
+        if (normE > maxNormEnergy) {
+          secondBestNormEnergy = maxNormEnergy;
+          maxNormEnergy = normE;
+          bestTone = m;
+        } else if (normE > secondBestNormEnergy) {
+          secondBestNormEnergy = normE;
+        }
+      }
 
       // Local SNR calculation
-      const higherE = Math.max(normMarkE, normSpaceE);
-      const lowerE = Math.min(normMarkE, normSpaceE) + 1e-6;
-      const localSnrDb = Math.min(45, Math.max(0, 10 * Math.log10(higherE / lowerE)));
+      const localSnrDb = Math.min(45, Math.max(0, 10 * Math.log10(Math.max(1, maxNormEnergy) / Math.max(1e-6, secondBestNormEnergy))));
       snrSum += localSnrDb;
       snrSamplesCount++;
 
-      // Symbol Clock Recovery (Second-order DPLL):
-      // A zero-crossing of discriminator indicates a transition between Mark and Space (symbol boundary)
-      if (this.lastDiscriminator * discriminator < 0) {
-        // Transition detected!
-        // Ideal transition phase is 0. Calculate phase error:
+      // Symbol Clock Recovery (Second-order DPLL)
+      let transitionDetected = false;
+      if (scheme === '2FSK') {
+        const normSpace = energies[0] / Math.max(1e-6, this.peakEnergies[0]);
+        const normMark = energies[1] / Math.max(1e-6, this.peakEnergies[1]);
+        const disc = normMark - normSpace;
+        if (this.lastDiscriminator * disc < 0) {
+          transitionDetected = true;
+        }
+        this.lastDiscriminator = disc;
+      } else {
+        if (this.lastWinningTone !== -1 && bestTone !== this.lastWinningTone && this.samplesSinceTrans >= N * 0.5) {
+          transitionDetected = true;
+          this.samplesSinceTrans = 0;
+        }
+        this.lastWinningTone = bestTone;
+      }
+
+      if (transitionDetected) {
         let phaseError = this.clockPhase;
         if (phaseError > N / 2) {
           phaseError -= N;
         }
-        // Second-order proportional & integral feedback
         this.clockPhase -= phaseError * 0.4;
         this.clockFreqAdjust = Math.max(-1.5, Math.min(1.5, this.clockFreqAdjust - phaseError * 0.02));
       }
-      this.lastDiscriminator = discriminator;
 
       // Advance symbol clock with crystal PPM drift compensation
       const prevClock = this.clockPhase;
@@ -1024,14 +1171,40 @@ export class FSKDemodulator {
       this.clockPhase += step;
 
       // When the clock phase passes through the middle of the symbol (N/2, optimal eye opening):
-      // Sample the bit!
       if (prevClock < N / 2 && this.clockPhase >= N / 2) {
-        const bit = discriminator >= 0 ? 1 : 0;
-        this.bitBuffer.push(bit);
+        if (scheme === '4FSK') {
+          // Gray decode symbol to 2 bits:
+          // 0 -> 00, 1 -> 01, 2 -> 11, 3 -> 10
+          const GRAY_TO_BITS_4: Record<number, [number, number]> = {
+            0: [0, 0],
+            1: [0, 1],
+            2: [1, 1],
+            3: [1, 0],
+          };
+          const [b0, b1] = GRAY_TO_BITS_4[bestTone] || [0, 0];
+          this.bitBuffer.push(b0, b1);
+        } else if (scheme === '8FSK') {
+          // Gray decode symbol to 3 bits:
+          const GRAY_TO_BITS_8: Record<number, [number, number, number]> = {
+            0: [0, 0, 0],
+            1: [0, 0, 1],
+            2: [0, 1, 1],
+            3: [0, 1, 0],
+            4: [1, 1, 0],
+            5: [1, 1, 1],
+            6: [1, 0, 1],
+            7: [1, 0, 0],
+          };
+          const [b0, b1, b2] = GRAY_TO_BITS_8[bestTone] || [0, 0, 0];
+          this.bitBuffer.push(b0, b1, b2);
+        } else {
+          // 2-FSK: 1 = Mark (tone index 1), 0 = Space (tone index 0)
+          const bit = bestTone === 1 ? 1 : 0;
+          this.bitBuffer.push(bit);
+        }
 
-        // Limit bit buffer length to prevent memory leaks (retain sufficient depth for large frames up to 256 bytes with FEC)
-        if (this.bitBuffer.length > 20000) {
-          this.bitBuffer.splice(0, 5000);
+        if (this.bitBuffer.length > 30000) {
+          this.bitBuffer.splice(0, 8000);
         }
       }
 
@@ -1046,11 +1219,13 @@ export class FSKDemodulator {
     }
 
     if (snrSamplesCount > 0 && this.onSignalQualityCallback) {
+      const markE = this.peakEnergies[1] || 0.001;
+      const spaceE = this.peakEnergies[0] || 0.001;
       this.onSignalQualityCallback({
         snrDb: Math.round(snrSum / snrSamplesCount),
-        markEnergy: this.maxMarkEnergy,
-        spaceEnergy: this.maxSpaceEnergy,
-        rms: Math.sqrt(this.maxMarkEnergy + this.maxSpaceEnergy),
+        markEnergy: markE,
+        spaceEnergy: spaceE,
+        rms: Math.sqrt(markE + spaceE),
       });
     }
 
@@ -1066,6 +1241,7 @@ export class FSKDemodulator {
 
   /**
    * Parses complete frames from the streaming bit buffer.
+   * Supports 4-byte header [seq, lenHigh, lenLow, flags] for large chunks up to 2048 bytes.
    * Tolerates 1-bit error in the 16-bit sync word to avoid dropping frames on minor clicks.
    */
   public parsePacketsFromBitBuffer(): DecodedPacket[] {
@@ -1091,16 +1267,15 @@ export class FSKDemodulator {
       let cursor = i + 16;
       let fecCorrections = 0;
 
-      // Check if header bits are available (3 bytes * 14 bits = 42 bits)
-      if (cursor + 42 > this.bitBuffer.length) {
+      // Check if header bits are available (4 bytes * 14 bits = 56 bits)
+      if (cursor + 56 > this.bitBuffer.length) {
         // Wait for more incoming bits in next audio chunk
         break;
       }
 
-      // Decode Header [seq, len, flags]
+      // Decode Header [seq, lenHigh, lenLow, flags]
       const headerBytes: number[] = [];
-      let headerCorrupt = false;
-      for (let b = 0; b < 3; b++) {
+      for (let b = 0; b < 4; b++) {
         let highCode = 0, lowCode = 0;
         for (let bit = 0; bit < 7; bit++) highCode = (highCode << 1) | this.bitBuffer[cursor++];
         for (let bit = 0; bit < 7; bit++) lowCode = (lowCode << 1) | this.bitBuffer[cursor++];
@@ -1109,12 +1284,13 @@ export class FSKDemodulator {
         fecCorrections += res.corrections;
       }
 
-      const [seq, payloadLen, flags] = headerBytes;
+      const [seq, lenHigh, lenLow, flags] = headerBytes;
+      const payloadLen = (lenHigh << 8) | lenLow;
       const useFEC = (flags & 0x01) === 0x01;
 
-      // Validate header sanity (support chunk payloads up to 240 bytes)
-      if (payloadLen > 250) {
-        // False positive sync word or corrupted length! Skip 1 bit and keep searching
+      // Validate header sanity (support chunk payloads up to 2048 bytes)
+      if (payloadLen > 2048) {
+        // Corrupted length or false positive sync word! Skip 1 bit and keep searching
         i++;
         continue;
       }
@@ -1157,12 +1333,13 @@ export class FSKDemodulator {
       fecCorrections += crcHighRes.corrections + crcLowRes.corrections;
       const receivedCrc = ((crcHighRes.byte & 0xff) << 8) | (crcLowRes.byte & 0xff);
 
-      // Verify Checksum
-      const dataForCrc = new Uint8Array(3 + payload.length);
+      // Verify Checksum: [seq, lenHigh, lenLow, flags, ...payload]
+      const dataForCrc = new Uint8Array(4 + payload.length);
       dataForCrc[0] = seq;
-      dataForCrc[1] = payloadLen;
-      dataForCrc[2] = flags;
-      dataForCrc.set(payload, 3);
+      dataForCrc[1] = lenHigh;
+      dataForCrc[2] = lenLow;
+      dataForCrc[3] = flags;
+      dataForCrc.set(payload, 4);
       const expectedCrc = CRC16.compute(dataForCrc);
 
       const crcValid = (receivedCrc === expectedCrc);

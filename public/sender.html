@@ -208,13 +208,14 @@
 
       <div class="grid-2">
         <div>
-          <label for="baudRateSelect">波特率 (Baud / 速率)</label>
+          <label for="baudRateSelect">波特率与调制体制 (Modulation & Baud Rate)</label>
           <select id="baudRateSelect">
-            <option value="100" selected>100 bps (标准抗噪，Mark 1200 / Space 2200)</option>
-            <option value="200">200 bps (2倍速轻度加速)</option>
-            <option value="500">500 bps (5倍速平稳，Mark 1500 / Space 2500)</option>
-            <option value="1000">1000 bps (⚡ 10倍速 Turbo 极速，Mark 2000 / Space 3000)</option>
-            <option value="2000">2000 bps (🔥 20倍速 Extreme 超频，Mark 2000 / Space 4000)</option>
+            <option value="100">100 bps (标准抗噪 2-FSK, 1200 / 2200 Hz)</option>
+            <option value="500">500 bps (5倍速平稳 2-FSK, 1500 / 2500 Hz)</option>
+            <option value="1000">1000 bps (⚡ 10倍速 Turbo 2-FSK, 2000 / 3000 Hz)</option>
+            <option value="2000_2fsk">2000 bps (20倍速 2-FSK 经典超频, 2000 / 4000 Hz)</option>
+            <option value="2000_4fsk" selected>2000 bps (⚡ 4-FSK 高稳大卷推荐 · 1000 Baud, 1k/2k/3k/4k · 解决丢包！)</option>
+            <option value="4000">4000 bps (🔥 4-FSK 翻倍极速 · 2000 Baud, 1k/3k/5k/7k)</option>
           </select>
         </div>
         <div>
@@ -299,11 +300,14 @@
             <select id="chunkSizeSelect">
               <option value="32">32 字节 (超稳小包)</option>
               <option value="48">48 字节 (100 bps 标准)</option>
-              <option value="64" selected>64 字节 (⚡ 1000 bps 推荐，抗晶振漂移最佳)</option>
+              <option value="64">64 字节 (小分卷)</option>
               <option value="96">96 字节 (500 bps 推荐)</option>
-              <option value="128">128 字节 (1000 bps 大包模式)</option>
-              <option value="192">192 字节 (超大分卷，开销 &lt; 3%)</option>
-              <option value="220">220 字节 (极限容量分卷)</option>
+              <option value="128">128 字节 (1000 bps 推荐)</option>
+              <option value="192">192 字节 (2000 bps 2-FSK 推荐)</option>
+              <option value="220">220 字节 (兼容历史分卷)</option>
+              <option value="256" selected>256 字节 (⚡ 4-FSK 推荐大卷 · 高效低开销)</option>
+              <option value="384">384 字节 (超大分卷 · 500kB 仅需 1300 包)</option>
+              <option value="512">512 字节 (极限容量分卷 · 500kB 仅需 980 包)</option>
             </select>
           </div>
           <div>
@@ -465,20 +469,28 @@
       FILE_END: 3
     };
 
-    function encodePacketToBits(payload, seq, useFEC, packetType = PacketType.TEXT) {
+    function encodePacketToBits(payload, seq, useFEC, packetType = PacketType.TEXT, scheme = '2FSK') {
       const bits = [];
-      for (const b of PREAMBLE_BITS) bits.push(b);
+      if (scheme === '4FSK') {
+        for (let i = 0; i < 16; i++) {
+          bits.push(0, 0, 1, 0);
+        }
+      } else {
+        for (const b of PREAMBLE_BITS) bits.push(b);
+      }
       for (const b of SYNC_BITS) bits.push(b);
 
       const flags = (useFEC ? 0x01 : 0x00) | ((packetType & 0x07) << 1);
-      const headerBytes = [seq & 0xff, payload.length & 0xff, flags];
+      const lenHigh = (payload.length >> 8) & 0xff;
+      const lenLow = payload.length & 0xff;
+      const headerBytes = [seq & 0xff, lenHigh, lenLow, flags];
 
       const crcData = new Uint8Array(headerBytes.length + payload.length);
       crcData.set(headerBytes, 0);
       crcData.set(payload, headerBytes.length);
       const crc = computeCrc16(crcData);
 
-      // Header always protected with Hamming(7,4)
+      // Header always protected with Hamming(7,4) (4 bytes = 56 bits)
       for (const byte of headerBytes) {
         const [h, l] = hammingEncodeByte(byte);
         for (let i = 6; i >= 0; i--) bits.push((h >> i) & 1);
@@ -498,7 +510,7 @@
         }
       }
 
-      // CRC
+      // CRC (2 bytes protected with Hamming(7,4) = 28 bits)
       const [ch1, ch2] = hammingEncodeByte((crc >> 8) & 0xff);
       const [cl1, cl2] = hammingEncodeByte(crc & 0xff);
       for (let i = 6; i >= 0; i--) bits.push((ch1 >> i) & 1);
@@ -541,22 +553,72 @@
       document.getElementById('volumeVal').textContent = volEl.value + '% (' + db + ' dB)';
     });
 
+    function getModulationParams() {
+      const mode = document.getElementById('baudRateSelect').value;
+      if (mode === '2000_4fsk') {
+        return {
+          baudRate: 1000,
+          bitRate: 2000,
+          scheme: '4FSK',
+          frequencies: [1000, 2000, 3000, 4000],
+          markFreq: 3000,
+          spaceFreq: 1000,
+        };
+      } else if (mode === '4000') {
+        return {
+          baudRate: 2000,
+          bitRate: 4000,
+          scheme: '4FSK',
+          frequencies: [1000, 3000, 5000, 7000],
+          markFreq: 5000,
+          spaceFreq: 1000,
+        };
+      } else if (mode === '2000_2fsk' || mode === '2000') {
+        return {
+          baudRate: 2000,
+          bitRate: 2000,
+          scheme: '2FSK',
+          frequencies: null,
+          markFreq: parseFloat(markFreqEl.value) || 2000,
+          spaceFreq: parseFloat(spaceFreqEl.value) || 4000,
+        };
+      } else {
+        const baud = parseInt(mode, 10) || 100;
+        return {
+          baudRate: baud,
+          bitRate: baud,
+          scheme: '2FSK',
+          frequencies: null,
+          markFreq: parseFloat(markFreqEl.value) || (baud >= 1000 ? 2000 : baud >= 500 ? 1500 : 1200),
+          spaceFreq: parseFloat(spaceFreqEl.value) || (baud >= 1000 ? 3000 : baud >= 500 ? 2500 : 2200),
+        };
+      }
+    }
+
     const baudSelect = document.getElementById('baudRateSelect');
     baudSelect.addEventListener('change', () => {
-      const b = parseInt(baudSelect.value);
-      if (b === 1000) {
-        markFreqEl.value = 2000;
-        spaceFreqEl.value = 3000;
-        document.getElementById('chunkSizeSelect').value = '128';
-      } else if (b === 2000) {
+      const val = baudSelect.value;
+      if (val === '2000_4fsk') {
+        markFreqEl.value = 3000;
+        spaceFreqEl.value = 1000;
+        document.getElementById('chunkSizeSelect').value = '256';
+      } else if (val === '4000') {
+        markFreqEl.value = 5000;
+        spaceFreqEl.value = 1000;
+        document.getElementById('chunkSizeSelect').value = '256';
+      } else if (val === '2000_2fsk' || val === '2000') {
         markFreqEl.value = 2000;
         spaceFreqEl.value = 4000;
         document.getElementById('chunkSizeSelect').value = '192';
-      } else if (b === 500) {
+      } else if (val === '1000') {
+        markFreqEl.value = 2000;
+        spaceFreqEl.value = 3000;
+        document.getElementById('chunkSizeSelect').value = '128';
+      } else if (val === '500') {
         markFreqEl.value = 1500;
         spaceFreqEl.value = 2500;
         document.getElementById('chunkSizeSelect').value = '96';
-      } else if (b === 100) {
+      } else if (val === '100') {
         markFreqEl.value = 1200;
         spaceFreqEl.value = 2200;
         document.getElementById('chunkSizeSelect').value = '48';
@@ -643,19 +705,38 @@
     });
 
     // Modulate bits into audio samples
-    function modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude) {
+    function modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude, scheme = '2FSK', frequencies = null) {
       const samplesPerSymbol = Math.round(sampleRate / baudRate);
-      const totalSamples = bits.length * samplesPerSymbol + Math.round(sampleRate * 0.05);
+      let symbols = [];
+      let freqs = [];
+
+      if (scheme === '4FSK') {
+        freqs = frequencies && frequencies.length >= 4 ? frequencies : (baudRate >= 2000 ? [1000, 3000, 5000, 7000] : [1000, 2000, 3000, 4000]);
+        // Gray code mapping for 4-FSK: 00 -> 0, 01 -> 1, 11 -> 2, 10 -> 3
+        const gray4 = { 0b00: 0, 0b01: 1, 0b11: 2, 0b10: 3 };
+        const paddedBits = bits.slice();
+        if (paddedBits.length % 2 !== 0) paddedBits.push(0);
+
+        for (let i = 0; i < paddedBits.length; i += 2) {
+          const val = (paddedBits[i] << 1) | paddedBits[i + 1];
+          symbols.push(gray4[val] ?? 0);
+        }
+      } else {
+        freqs = [spaceFreq, markFreq];
+        symbols = bits;
+      }
+
+      const totalSamples = symbols.length * samplesPerSymbol + Math.round(sampleRate * 0.08);
       const buffer = new Float32Array(totalSamples);
 
       let phase = 0;
       const twoPi = 2 * Math.PI;
-      const leadSamples = Math.round(sampleRate * 0.02);
+      const leadSamples = Math.round(sampleRate * 0.04);
       let idx = leadSamples;
 
-      for (let b = 0; b < bits.length; b++) {
-        const bit = bits[b];
-        const freq = bit === 1 ? markFreq : spaceFreq;
+      for (let sIdx = 0; sIdx < symbols.length; sIdx++) {
+        const sym = symbols[sIdx];
+        const freq = freqs[sym] ?? freqs[0];
         const phaseInc = (twoPi * freq) / sampleRate;
         for (let s = 0; s < samplesPerSymbol; s++) {
           buffer[idx++] = amplitude * Math.sin(phase);
@@ -665,7 +746,7 @@
       }
 
       // Smooth envelope ramp
-      const ramp = Math.min(Math.round(sampleRate * 0.015), leadSamples);
+      const ramp = Math.min(Math.round(sampleRate * 0.02), leadSamples);
       for (let i = 0; i < ramp; i++) {
         const env = 0.5 * (1 - Math.cos((Math.PI * i) / ramp));
         const hIdx = leadSamples - ramp + i;
@@ -708,15 +789,13 @@
 
       const ac = getAudioContext();
       const sampleRate = ac.sampleRate;
-      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const mod = getModulationParams();
       const useFEC = document.getElementById('fecSelect').value === 'hamming';
-      const markFreq = parseFloat(markFreqEl.value);
-      const spaceFreq = parseFloat(spaceFreqEl.value);
       const amplitude = parseFloat(volEl.value) / 100;
 
       const payload = new TextEncoder().encode(text);
-      const bits = encodePacketToBits(payload, packetSeq, useFEC, PacketType.TEXT);
-      const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+      const bits = encodePacketToBits(payload, packetSeq, useFEC, PacketType.TEXT, mod.scheme);
+      const samples = modulateBits(bits, sampleRate, mod.baudRate, mod.markFreq, mod.spaceFreq, amplitude, mod.scheme, mod.frequencies);
 
       drawWaveform(samples);
 
@@ -775,9 +854,9 @@
       document.getElementById('fileInfoText').textContent = selectedFile.name + ' (' + selectedFile.size + ' 字节)';
       const chunkSize = parseInt(document.getElementById('chunkSizeSelect').value);
       const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
-      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const mod = getModulationParams();
       const totalPackets = totalChunks + 2;
-      const estSec = Math.ceil((totalPackets * (132 + chunkSize * 14)) / baudRate);
+      const estSec = Math.ceil((totalPackets * (132 + chunkSize * 14)) / mod.bitRate);
       document.getElementById('fileEstimate').textContent = totalChunks + ' 分卷 · 约 ' + estSec + ' 秒';
     }
     document.getElementById('chunkSizeSelect').addEventListener('change', updateFileInfo);
@@ -790,10 +869,8 @@
 
       const ac = getAudioContext();
       const sampleRate = ac.sampleRate;
-      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const mod = getModulationParams();
       const useFEC = document.getElementById('fecSelect').value === 'hamming';
-      const markFreq = parseFloat(markFreqEl.value);
-      const spaceFreq = parseFloat(spaceFreqEl.value);
       const amplitude = parseFloat(volEl.value) / 100;
       const chunkSize = parseInt(document.getElementById('chunkSizeSelect').value);
 
@@ -847,8 +924,8 @@
         document.getElementById('fileProgressPercent').textContent = percent + '%';
         document.getElementById('fileProgressBar').style.width = percent + '%';
 
-        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type);
-        const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type, mod.scheme);
+        const samples = modulateBits(bits, sampleRate, mod.baudRate, mod.markFreq, mod.spaceFreq, amplitude, mod.scheme, mod.frequencies);
 
         drawWaveform(samples);
         const durationSec = (samples.length / sampleRate).toFixed(2);
@@ -865,7 +942,7 @@
 
         // Adaptive guard silence interval (30ms for >=1000bps, 70ms for low baud)
         if (i < packets.length - 1 && !isCancelled) {
-          await new Promise(r => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+          await new Promise(r => setTimeout(r, mod.baudRate >= 1000 ? 30 : 70));
         }
       }
 
@@ -893,10 +970,8 @@
 
       const ac = getAudioContext();
       const sampleRate = ac.sampleRate;
-      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const mod = getModulationParams();
       const useFEC = document.getElementById('fecSelect').value === 'hamming';
-      const markFreq = parseFloat(markFreqEl.value);
-      const spaceFreq = parseFloat(spaceFreqEl.value);
       const amplitude = parseFloat(volEl.value) / 100;
 
       const packets = [];
@@ -929,8 +1004,8 @@
         document.getElementById('fileProgressPercent').textContent = percent + '%';
         document.getElementById('fileProgressBar').style.width = percent + '%';
 
-        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type);
-        const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type, mod.scheme);
+        const samples = modulateBits(bits, sampleRate, mod.baudRate, mod.markFreq, mod.spaceFreq, amplitude, mod.scheme, mod.frequencies);
 
         drawWaveform(samples);
         const durationSec = (samples.length / sampleRate).toFixed(2);
@@ -946,7 +1021,7 @@
         document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
 
         if (i < packets.length - 1 && !isCancelled) {
-          await new Promise(r => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+          await new Promise(r => setTimeout(r, mod.baudRate >= 1000 ? 30 : 70));
         }
       }
 
@@ -970,10 +1045,8 @@
 
       const ac = getAudioContext();
       const sampleRate = ac.sampleRate;
-      const baudRate = parseInt(document.getElementById('baudRateSelect').value);
+      const mod = getModulationParams();
       const useFEC = document.getElementById('fecSelect').value === 'hamming';
-      const markFreq = parseFloat(markFreqEl.value);
-      const spaceFreq = parseFloat(spaceFreqEl.value);
       const amplitude = parseFloat(volEl.value) / 100;
 
       const packets = [];
@@ -1014,8 +1087,8 @@
         document.getElementById('fileProgressPercent').textContent = percent + '%';
         document.getElementById('fileProgressBar').style.width = percent + '%';
 
-        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type);
-        const samples = modulateBits(bits, sampleRate, baudRate, markFreq, spaceFreq, amplitude);
+        const bits = encodePacketToBits(pkt.payload, packetSeq, useFEC, pkt.type, mod.scheme);
+        const samples = modulateBits(bits, sampleRate, mod.baudRate, mod.markFreq, mod.spaceFreq, amplitude, mod.scheme, mod.frequencies);
 
         drawWaveform(samples);
         const durationSec = (samples.length / sampleRate).toFixed(2);
@@ -1031,7 +1104,7 @@
         document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
 
         if (i < packets.length - 1 && !isCancelled) {
-          await new Promise(r => setTimeout(r, baudRate >= 1000 ? 30 : 70));
+          await new Promise(r => setTimeout(r, mod.baudRate >= 1000 ? 30 : 70));
         }
       }
 

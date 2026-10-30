@@ -220,19 +220,24 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
 
     const ctx = getAudioContext();
     const actualSampleRate = ctx.sampleRate;
+    const preset = SPEED_PRESETS[selectedPresetId];
+    const modulationScheme = preset?.modulationScheme || '2FSK';
+    const frequencies = preset?.frequencies;
 
     const config: ModemConfig = {
       sampleRate: actualSampleRate,
       baudRate,
       markFreq,
       spaceFreq,
+      modulationScheme,
+      frequencies,
       amplitude: volume / 100,
       useFEC,
     };
 
     // 1. Frame encoding with Hamming(7,4) and CRC-16
     const payload = new TextEncoder().encode(trimmed);
-    const bits = FrameEncoder.encodePacketToBits(payload, packetSeq, useFEC, PacketType.TEXT);
+    const bits = FrameEncoder.encodePacketToBits(payload, packetSeq, useFEC, PacketType.TEXT, modulationScheme);
 
     // 2. Modulate to CPFSK
     const samples = FSKModulator.modulate(bits, config);
@@ -257,7 +262,7 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
     const dur = (samples.length / actualSampleRate).toFixed(2);
     setFrameDuration(`${bits.length} bits / ${dur}s`);
     setIsTransmitting(true);
-    setStatusText(`正在向 3.5mm 耳机孔输出音频文本报文 [Seq #${packetSeq}]...`);
+    setStatusText(`正在向 3.5mm 耳机孔输出音频文本报文 [Seq #${packetSeq}] (${modulationScheme})...`);
 
     source.onended = () => {
       setIsTransmitting(false);
@@ -326,11 +331,17 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
 
     const ctx = getAudioContext();
     const actualSampleRate = ctx.sampleRate;
+    const preset = SPEED_PRESETS[selectedPresetId];
+    const modulationScheme = preset?.modulationScheme || '2FSK';
+    const frequencies = preset?.frequencies;
+
     const config: ModemConfig = {
       sampleRate: actualSampleRate,
       baudRate,
       markFreq,
       spaceFreq,
+      modulationScheme,
+      frequencies,
       amplitude: volume / 100,
       useFEC,
     };
@@ -342,7 +353,8 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
       selectedFile.mime,
       chunkSize,
       useFEC,
-      packetSeq
+      packetSeq,
+      modulationScheme
     );
 
     isCancelledRef.current = false;
@@ -421,6 +433,8 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
     }
   };
 
+
+
   // --- SELECTIVE RETRANSMISSION (ARQ) ---
   const handleRetransmitSelected = async () => {
     if (!selectedFile || selectedFile.data.length === 0) return;
@@ -436,11 +450,17 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
 
     const ctx = getAudioContext();
     const actualSampleRate = ctx.sampleRate;
+    const preset = SPEED_PRESETS[selectedPresetId];
+    const modulationScheme = preset?.modulationScheme || '2FSK';
+    const frequencies = preset?.frequencies;
+
     const config: ModemConfig = {
       sampleRate: actualSampleRate,
       baudRate,
       markFreq,
       spaceFreq,
+      modulationScheme,
+      frequencies,
       amplitude: volume / 100,
       useFEC,
     };
@@ -452,7 +472,8 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
       chunkSize,
       useFEC,
       targetIndices,
-      packetSeq
+      packetSeq,
+      modulationScheme
     );
 
     isCancelledRef.current = false;
@@ -527,11 +548,17 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
 
     const ctx = getAudioContext();
     const actualSampleRate = ctx.sampleRate;
+    const preset = SPEED_PRESETS[selectedPresetId];
+    const modulationScheme = preset?.modulationScheme || '2FSK';
+    const frequencies = preset?.frequencies;
+
     const config: ModemConfig = {
       sampleRate: actualSampleRate,
       baudRate,
       markFreq,
       spaceFreq,
+      modulationScheme,
+      frequencies,
       amplitude: volume / 100,
       useFEC,
     };
@@ -543,7 +570,8 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
       chunkSize,
       useFEC,
       indices,
-      packetSeq
+      packetSeq,
+      modulationScheme
     );
 
     // Append FILE_END packet so receiver finishes cleanly
@@ -553,7 +581,7 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
       crc: CRC16.compute(selectedFile.data),
     });
     const endPayload = new TextEncoder().encode(endMeta);
-    const endBits = FrameEncoder.encodePacketToBits(endPayload, (packetSeq + packets.length) & 0xff, useFEC, PacketType.FILE_END);
+    const endBits = FrameEncoder.encodePacketToBits(endPayload, (packetSeq + packets.length) & 0xff, useFEC, PacketType.FILE_END, modulationScheme);
     packets.push({
       seq: (packetSeq + packets.length) & 0xff,
       chunkIdx: totalChunks,
@@ -728,35 +756,52 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
                   当前: {SPEED_PRESETS[selectedPresetId]?.speedMultiplier || 1}x 速
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {Object.values(SPEED_PRESETS).map((p) => {
-                  const isActive = baudRate === p.baudRate && markFreq === p.markFreq && spaceFreq === p.spaceFreq;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      disabled={isTransmitting}
-                      onClick={() => applySpeedPreset(p.id)}
-                      className={`p-2.5 rounded-lg border text-left transition cursor-pointer disabled:opacity-50 ${
-                        isActive
-                          ? 'bg-cyan-950/80 border-cyan-500 text-cyan-300 shadow-sm shadow-cyan-500/20'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white">{p.baudRate} bps</span>
-                        <span className={`text-[10px] font-mono px-1 rounded ${
-                          p.speedMultiplier >= 10 ? 'bg-amber-950 text-amber-400 border border-amber-800' : 'bg-slate-900 text-slate-400'
-                        }`}>
-                          {p.speedMultiplier}x
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 truncate mt-0.5">
-                        {p.id === '1000' ? '10倍极速 Turbo' : p.id === '2000' ? '20倍超频' : p.id === '500' ? '5倍平稳' : '1x 标准抗噪'}
-                      </div>
-                    </button>
-                  );
-                })}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {Object.values(SPEED_PRESETS)
+                  .filter((p, idx, arr) => arr.findIndex((x) => x.id === p.id) === idx && p.id !== '2000')
+                  .map((p) => {
+                    const isActive = selectedPresetId === p.id || (p.id === '2000_4fsk' && selectedPresetId === '2000');
+                    const is4FSK = p.modulationScheme === '4FSK';
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        disabled={isTransmitting}
+                        onClick={() => applySpeedPreset(p.id)}
+                        className={`p-2.5 rounded-lg border text-left transition cursor-pointer disabled:opacity-50 ${
+                          isActive
+                            ? 'bg-cyan-950/80 border-cyan-500 text-cyan-300 shadow-sm shadow-cyan-500/20'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white">{p.bitRate} bps</span>
+                          <span className={`text-[10px] font-mono px-1 rounded ${
+                            is4FSK
+                              ? 'bg-cyan-900/80 text-cyan-300 border border-cyan-600/80'
+                              : p.speedMultiplier >= 10
+                              ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}>
+                            {is4FSK ? '4-FSK' : `${p.speedMultiplier}x`}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                          {p.id === '2000_4fsk'
+                            ? '⚡ 4-FSK 高稳大卷'
+                            : p.id === '4000'
+                            ? '🔥 4-FSK 翻倍极速'
+                            : p.id === '1000'
+                            ? '10倍极速 Turbo'
+                            : p.id === '2000_2fsk'
+                            ? '2-FSK 经典超频'
+                            : p.id === '500'
+                            ? '5倍平稳加速'
+                            : '1x 标准抗噪'}
+                        </div>
+                      </button>
+                    );
+                  })}
               </div>
             </div>
 
@@ -1072,10 +1117,14 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
                         >
                           <option value={32}>32 字节 (超稳微包，适合 100 bps)</option>
                           <option value={48}>48 字节 (100 bps 推荐标准)</option>
+                          <option value={64}>64 字节 (标准通用分卷)</option>
                           <option value={96}>96 字节 (500 bps 推荐)</option>
-                          <option value={128}>128 字节 (⚡ 1000 bps Turbo 推荐)</option>
-                          <option value={192}>192 字节 (超大分卷，头部开销 &lt; 3%)</option>
-                          <option value={220}>220 字节 (极限容量分卷)</option>
+                          <option value={128}>128 字节 (⚡ 1000 bps 推荐)</option>
+                          <option value={192}>192 字节 (大容量分卷)</option>
+                          <option value={220}>220 字节 (旧版极限容量分卷)</option>
+                          <option value={256}>256 字节 (⭐ 4-FSK 推荐，开销 &lt; 2%)</option>
+                          <option value={384}>384 字节 (🚀 特大分卷，吞吐效率 98.5%)</option>
+                          <option value={512}>512 字节 (🔥 512B 超大分卷，适合 4000 bps)</option>
                         </select>
                       </div>
 
