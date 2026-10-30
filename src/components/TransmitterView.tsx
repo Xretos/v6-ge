@@ -758,10 +758,11 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {Object.values(SPEED_PRESETS)
-                  .filter((p, idx, arr) => arr.findIndex((x) => x.id === p.id) === idx && p.id !== '2000')
+                  .filter((p, idx, arr) => arr.findIndex((x) => x.id === p.id) === idx && p.id !== '2000' && p.id !== '3000' && p.id !== '6000')
                   .map((p) => {
                     const isActive = selectedPresetId === p.id || (p.id === '2000_4fsk' && selectedPresetId === '2000');
                     const is4FSK = p.modulationScheme === '4FSK';
+                    const is8FSK = p.modulationScheme === '8FSK';
                     return (
                       <button
                         key={p.id}
@@ -777,17 +778,23 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-white">{p.bitRate} bps</span>
                           <span className={`text-[10px] font-mono px-1 rounded ${
-                            is4FSK
+                            is8FSK
+                              ? 'bg-purple-900/80 text-purple-300 border border-purple-600/80'
+                              : is4FSK
                               ? 'bg-cyan-900/80 text-cyan-300 border border-cyan-600/80'
                               : p.speedMultiplier >= 10
                               ? 'bg-amber-950 text-amber-400 border border-amber-800'
                               : 'bg-slate-900 text-slate-400'
                           }`}>
-                            {is4FSK ? '4-FSK' : `${p.speedMultiplier}x`}
+                            {is8FSK ? '8-FSK' : is4FSK ? '4-FSK' : `${p.speedMultiplier}x`}
                           </span>
                         </div>
                         <div className="text-[10px] text-slate-400 truncate mt-0.5">
-                          {p.id === '2000_4fsk'
+                          {p.id === '3000_8fsk'
+                            ? '🚀 8-FSK 3000bps'
+                            : p.id === '6000_8fsk'
+                            ? '⚡ 8-FSK 6000bps'
+                            : p.id === '2000_4fsk'
                             ? '⚡ 4-FSK 高稳大卷'
                             : p.id === '4000'
                             ? '🔥 4-FSK 翻倍极速'

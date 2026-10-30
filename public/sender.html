@@ -216,6 +216,8 @@
             <option value="2000_2fsk">2000 bps (20倍速 2-FSK 经典超频, 2000 / 4000 Hz)</option>
             <option value="2000_4fsk" selected>2000 bps (⚡ 4-FSK 高稳大卷推荐 · 1000 Baud, 1k/2k/3k/4k · 解决丢包！)</option>
             <option value="4000">4000 bps (🔥 4-FSK 翻倍极速 · 2000 Baud, 1k/3k/5k/7k)</option>
+            <option value="3000_8fsk">3000 bps (🚀 8-FSK 3比特/码元 · 1000 Baud, 1k-8kHz)</option>
+            <option value="6000_8fsk">6000 bps (⚡ 8-FSK 翻3倍超频 · 2000 Baud, 6kbps)</option>
           </select>
         </div>
         <div>
@@ -555,7 +557,25 @@
 
     function getModulationParams() {
       const mode = document.getElementById('baudRateSelect').value;
-      if (mode === '2000_4fsk') {
+      if (mode === '3000_8fsk') {
+        return {
+          baudRate: 1000,
+          bitRate: 3000,
+          scheme: '8FSK',
+          frequencies: [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+          markFreq: 4000,
+          spaceFreq: 1000,
+        };
+      } else if (mode === '6000_8fsk') {
+        return {
+          baudRate: 2000,
+          bitRate: 6000,
+          scheme: '8FSK',
+          frequencies: [1000, 2500, 4000, 5500, 7000, 8500, 10000, 11500],
+          markFreq: 7000,
+          spaceFreq: 1000,
+        };
+      } else if (mode === '2000_4fsk') {
         return {
           baudRate: 1000,
           bitRate: 2000,
@@ -598,7 +618,15 @@
     const baudSelect = document.getElementById('baudRateSelect');
     baudSelect.addEventListener('change', () => {
       const val = baudSelect.value;
-      if (val === '2000_4fsk') {
+      if (val === '3000_8fsk') {
+        markFreqEl.value = 4000;
+        spaceFreqEl.value = 1000;
+        document.getElementById('chunkSizeSelect').value = '384';
+      } else if (val === '6000_8fsk') {
+        markFreqEl.value = 7000;
+        spaceFreqEl.value = 1000;
+        document.getElementById('chunkSizeSelect').value = '512';
+      } else if (val === '2000_4fsk') {
         markFreqEl.value = 3000;
         spaceFreqEl.value = 1000;
         document.getElementById('chunkSizeSelect').value = '256';
@@ -720,6 +748,19 @@
         for (let i = 0; i < paddedBits.length; i += 2) {
           const val = (paddedBits[i] << 1) | paddedBits[i + 1];
           symbols.push(gray4[val] ?? 0);
+        }
+      } else if (scheme === '8FSK') {
+        freqs = frequencies && frequencies.length >= 8 ? frequencies : (baudRate >= 2000 ? [1000, 2500, 4000, 5500, 7000, 8500, 10000, 11500] : [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]);
+        // Gray code mapping for 8-FSK (3 bits -> 1 symbol)
+        const gray8 = {
+          0b000: 0, 0b001: 1, 0b011: 2, 0b010: 3,
+          0b110: 4, 0b111: 5, 0b101: 6, 0b100: 7
+        };
+        const paddedBits = bits.slice();
+        while (paddedBits.length % 3 !== 0) paddedBits.push(0);
+        for (let i = 0; i < paddedBits.length; i += 3) {
+          const val = (paddedBits[i] << 2) | (paddedBits[i + 1] << 1) | paddedBits[i + 2];
+          symbols.push(gray8[val] ?? 0);
         }
       } else {
         freqs = [spaceFreq, markFreq];
@@ -990,6 +1031,18 @@
           desc: '重传分卷 [' + (c + 1) + '/' + totalChunks + ']'
         });
       }
+
+      // Also append FILE_END packet so receiver triggers file completion & CRC validation
+      const endMeta = JSON.stringify({
+        name: selectedFile.name,
+        size: selectedFile.data.length,
+        crc: computeCrc16(selectedFile.data)
+      });
+      packets.push({
+        type: PacketType.FILE_END,
+        payload: new TextEncoder().encode(endMeta),
+        desc: '重传结束确认包: ' + selectedFile.name
+      });
 
       isCancelled = false;
       document.getElementById('fileProgressCard').style.display = 'block';

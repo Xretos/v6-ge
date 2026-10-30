@@ -457,6 +457,111 @@ test('4-FSK 2000 bps: Multi-Chunk File Transfer with 384-byte extra-large chunks
   assert.deepEqual(completedFile.data, fileBytes);
 });
 
+test('8-FSK Turbo Mode: 3000 bps (1000 Baud, 8 tones, 3 bits/symbol)', () => {
+  const message = '8-FSK-3000BPS-TEST-DATA';
+  const payload = new TextEncoder().encode(message);
+
+  const config = {
+    sampleRate: 48000,
+    baudRate: 1000, // 1000 Baud * 3 bits = 3000 bps!
+    modulationScheme: '8FSK' as const,
+    markFreq: 4000,
+    spaceFreq: 1000,
+    frequencies: [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+    amplitude: 0.85,
+    useFEC: false,
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 88, false, PacketType.TEXT, '8FSK');
+  const audio = FSKModulator.modulate(bits, config);
+
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audio);
+
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0].seq, 88);
+  assert.equal(packets[0].crcValid, true);
+  assert.equal(packets[0].text, message);
+});
+
+test('Selective Retransmission: Auto-Assembly triggers when last missing chunk arrives', () => {
+  const filename = 'auto_merge_test.bin';
+  const fileBytes = new Uint8Array(512);
+  for (let i = 0; i < fileBytes.length; i++) fileBytes[i] = (i * 7 + 3) & 0xff;
+
+  const chunkSize = 128; // 4 chunks
+  const packets = FileChunker.createFilePackets(filename, fileBytes, 'application/octet-stream', chunkSize, false, 1, '4FSK');
+  assert.equal(packets.length, 6); // START, 4 DATA (0,1,2,3), END
+
+  const assembler = new FileAssembler();
+  assembler.clearStorage();
+  let completedFile: any = null;
+  assembler.onComplete = (f) => { completedFile = f; };
+
+  // First pass: deliver START, chunk 0, chunk 1, chunk 3 (simulate dropping chunk 2), then deliver END
+  assembler.processPacket({
+    seq: 1,
+    crcValid: true,
+    packetType: PacketType.FILE_START,
+    payload: packets[0].payload,
+    fecCorrections: 0,
+    fileMeta: { name: filename, size: fileBytes.length, chunks: 4, mime: 'application/octet-stream' }
+  });
+  assembler.processPacket({
+    seq: 2,
+    crcValid: true,
+    packetType: PacketType.FILE_DATA,
+    payload: packets[1].payload,
+    fecCorrections: 0,
+    fileMeta: { chunkIdx: 0, totalChunks: 4, chunkData: fileBytes.subarray(0, 128) }
+  });
+  assembler.processPacket({
+    seq: 3,
+    crcValid: true,
+    packetType: PacketType.FILE_DATA,
+    payload: packets[2].payload,
+    fecCorrections: 0,
+    fileMeta: { chunkIdx: 1, totalChunks: 4, chunkData: fileBytes.subarray(128, 256) }
+  });
+  assembler.processPacket({
+    seq: 5,
+    crcValid: true,
+    packetType: PacketType.FILE_DATA,
+    payload: packets[4].payload,
+    fecCorrections: 0,
+    fileMeta: { chunkIdx: 3, totalChunks: 4, chunkData: fileBytes.subarray(384, 512) }
+  });
+  assembler.processPacket({
+    seq: 6,
+    crcValid: true,
+    packetType: PacketType.FILE_END,
+    payload: packets[5].payload,
+    fecCorrections: 0,
+    fileMeta: { name: filename, size: fileBytes.length, crc: CRC16.compute(fileBytes) }
+  });
+
+  // Verification: missing chunk 2 (1-based #3)
+  assert.equal(completedFile, null, 'File should not assemble while chunk 2 is missing');
+  assert.deepEqual(assembler.getMissingChunkNumbers1Based(), [3]);
+
+  // Now, simulate receiving selective retransmission for chunk 2 ONLY (without sending FILE_END again)
+  const result = assembler.processPacket({
+    seq: 7,
+    crcValid: true,
+    packetType: PacketType.FILE_DATA,
+    payload: packets[3].payload,
+    fecCorrections: 0,
+    fileMeta: { chunkIdx: 2, totalChunks: 4, chunkData: fileBytes.subarray(256, 384) }
+  });
+
+  // Verification: BUG 2 fixed! Auto-assembly MUST trigger on the final FILE_DATA chunk!
+  assert.ok(result !== null, 'processPacket should return assembled file immediately upon receiving final chunk');
+  assert.ok(completedFile !== null, 'assembler.onComplete should fire on final chunk');
+  assert.equal(completedFile.size, fileBytes.length);
+  assert.equal(completedFile.crcValid, true);
+  assert.deepEqual(completedFile.data, fileBytes);
+});
+
 
 
 

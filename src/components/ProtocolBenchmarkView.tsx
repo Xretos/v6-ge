@@ -410,8 +410,47 @@ export const ProtocolBenchmarkView: React.FC = () => {
                   <td className="py-2.5 px-3 font-mono text-purple-300 font-bold">~470 B/s</td>
                   <td className="py-2.5 px-3 font-mono text-purple-300 font-bold">~18 分钟</td>
                 </tr>
+                <tr className="bg-blue-950/30">
+                  <td className="py-2.5 px-3 text-cyan-300 font-bold">🚀 3000 bps 8-FSK (3 bits/码元)</td>
+                  <td className="py-2.5 px-3 font-bold text-white">8-FSK [1k~8kHz 8正交频点]</td>
+                  <td className="py-2.5 px-3 font-bold text-cyan-300">384~512 字节 / 卷</td>
+                  <td className="py-2.5 px-3 font-mono text-cyan-300 font-bold">~354 B/s</td>
+                  <td className="py-2.5 px-3 font-mono text-cyan-300 font-bold">~23.5 分钟</td>
+                </tr>
+                <tr className="bg-amber-950/30">
+                  <td className="py-2.5 px-3 text-amber-300 font-bold">⚡ 6000 bps 8-FSK (6 kbps 极速)</td>
+                  <td className="py-2.5 px-3 font-bold text-white">8-FSK [1k~11.5kHz 8频点]</td>
+                  <td className="py-2.5 px-3 font-bold text-amber-300">512~768 字节 / 卷</td>
+                  <td className="py-2.5 px-3 font-mono text-amber-300 font-bold">~708 B/s</td>
+                  <td className="py-2.5 px-3 font-mono text-amber-300 font-bold">~11.8 分钟</td>
+                </tr>
               </tbody>
             </table>
+          </div>
+
+          {/* Deep Dive: M-FSK vs OFDM+QAM */}
+          <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
+            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>技术深度剖析：为什么手机 3.5mm 耳机孔首选 8-FSK，而不是 OFDM + QPSK/QAM？</span>
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] leading-relaxed">
+              <div className="p-3 bg-slate-900/90 rounded-lg border border-slate-800 space-y-1.5">
+                <span className="text-emerald-400 font-bold">1. 零峰均比 (0 dB PAPR 恒包络) vs OFDM 高峰均比削顶失真</span>
+                <p className="text-slate-400">
+                  手机 3.5mm 麦克风输入接口包含硬件预放器与模拟 AGC 限幅器。OFDM 是数十甚至数百个正弦波的线性叠加，峰均比（PAPR）通常高达 <strong>9~13 dB</strong>。一旦进入手机麦克风，高幅度峰值会立刻触发模拟削顶与强非线性饱和，导致子载波间发生严重的互调失真（IMD），正交性瞬间崩溃。<br/>
+                  相比之下，<strong>M-FSK (2-FSK / 4-FSK / 8-FSK) 是纯正弦波恒包络信号（PAPR = 0 dB）</strong>，在时域上幅度恒定，完全免疫手机模拟放大器和 AGC 的非线性压缩与削顶！
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900/90 rounded-lg border border-slate-800 space-y-1.5">
+                <span className="text-cyan-400 font-bold">2. 非相干能量判决 vs QPSK/QAM 晶振温漂与群延时失真</span>
+                <p className="text-slate-400">
+                  两台手机的音频 DAC/ADC 采样晶振存在 50~200 ppm 的硬件时钟偏差。OFDM 的子载波间距非常密集（如 50~100Hz），微小时钟漂移就会导致剧烈的子载波间串扰（ICI）；而 QPSK/QAM 依赖极其精确的载波相位与信道均衡。<br/>
+                  3.5mm 耳机口含有隔直电容与低通滤波，相位在 1kHz~10kHz 间非线性扭曲严重。而我们的 <strong>8-FSK 采用非相干正交匹配滤波（I/Q 模平方能量解调）</strong>，根本不需要知道载波的绝对相位，只要频点能量最大即可准确解码，抗噪与容错能力极其强悍！
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-2">
@@ -426,7 +465,7 @@ export const ProtocolBenchmarkView: React.FC = () => {
               <div className="p-2.5 bg-slate-900 rounded border border-slate-800">
                 <span className="text-emerald-400 font-bold">方案二：左右立体声双声道空间复用 (MIMO 提速 2x)</span>
                 <p className="text-slate-400 mt-1">
-                  3.5mm 耳机接口具备独立的左声道 (Left) 与右声道 (Right)。在发送端将文件拆分为奇数包和偶数包，分别在左声道和右声道并发调制播放，接收端使用立体声录音独立解调，可在现有 4-FSK 基础上直接将总吞吐翻倍至 <strong>8000 bps (8 kbps)</strong>！
+                  3.5mm 耳机接口具备独立的左声道 (Left) 与右声道 (Right)。在发送端将文件拆分为奇数包和偶数包，分别在左声道和右声道并发调制播放，接收端使用立体声录音独立解调，可在现有 8-FSK 基础上直接将总吞吐翻倍至 <strong>12000 bps (12 kbps)</strong>！
                 </p>
               </div>
             </div>

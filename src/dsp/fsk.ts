@@ -257,10 +257,44 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
     throughputDesc: '有效 ~472 字节/秒 (纯CRC) / ~284 字节/秒 (含FEC)',
     est500kDuration: '约 17.6 分钟 (纯CRC模式)',
   },
+  '3000_8fsk': {
+    id: '3000_8fsk',
+    name: '3000 bps (🚀 8-FSK 3比特/码元 1000 Baud · 3kbps)',
+    baudRate: 1000,
+    modulationScheme: '8FSK',
+    bitRate: 3000,
+    markFreq: 4000,
+    spaceFreq: 1000,
+    frequencies: [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+    recommendedChunkSize: 384,
+    recommendedUseFEC: false,
+    speedMultiplier: 30,
+    description: '8频点(1k-8kHz正交) 3 bits/symbol！在1000 Baud安全波特率下直接达到3000 bps，零峰均比(0dB PAPR)，完全免疫手机麦克风AGC削顶！',
+    throughputDesc: '有效 ~354 字节/秒 (纯CRC)',
+    est500kDuration: '约 23.5 分钟 (纯CRC模式)',
+  },
+  '6000_8fsk': {
+    id: '6000_8fsk',
+    name: '6000 bps (⚡ 8-FSK 翻3倍超频 2000 Baud · 6kbps)',
+    baudRate: 2000,
+    modulationScheme: '8FSK',
+    bitRate: 6000,
+    markFreq: 7000,
+    spaceFreq: 1000,
+    frequencies: [1000, 2500, 4000, 5500, 7000, 8500, 10000, 11500],
+    recommendedChunkSize: 512,
+    recommendedUseFEC: false,
+    speedMultiplier: 60,
+    description: '8频点2000 Baud超频极速，单符号传输3比特，瞬时吞吐达6000 bps！',
+    throughputDesc: '有效 ~708 字节/秒 (纯CRC)',
+    est500kDuration: '约 11.8 分钟 (纯CRC模式)',
+  },
 };
 
 // Legacy compatibility aliases
 SPEED_PRESETS['2000'] = SPEED_PRESETS['2000_4fsk'];
+SPEED_PRESETS['3000'] = SPEED_PRESETS['3000_8fsk'];
+SPEED_PRESETS['6000'] = SPEED_PRESETS['6000_8fsk'];
 
 export enum PacketType {
   TEXT = 0,
@@ -505,6 +539,23 @@ export class FileChunker {
       });
       curSeq++;
     }
+
+    // Append FILE_END packet so receiver validates complete file and triggers finalization
+    const endMeta = JSON.stringify({
+      name: filename,
+      size: fileBytes.length,
+      crc: CRC16.compute(fileBytes),
+    });
+    const endPayload = new TextEncoder().encode(endMeta);
+    const endBits = FrameEncoder.encodePacketToBits(endPayload, curSeq & 0xff, useFEC, PacketType.FILE_END, scheme);
+    packets.push({
+      seq: curSeq & 0xff,
+      chunkIdx: -1,
+      packetType: PacketType.FILE_END,
+      bits: endBits,
+      description: `重传结束确认包: ${filename}`,
+      payload: endPayload,
+    });
 
     return packets;
   }
@@ -1117,13 +1168,21 @@ export class FSKDemodulator {
       }
 
       // Dynamic Equalization across all M tones
+      let globalMaxPeak = 0.005;
+      for (let m = 0; m < M; m++) {
+        this.peakEnergies[m] = Math.max(energies[m], this.peakEnergies[m] * 0.998);
+        if (this.peakEnergies[m] > globalMaxPeak) {
+          globalMaxPeak = this.peakEnergies[m];
+        }
+      }
+
       let bestTone = 0;
       let maxNormEnergy = -1;
       let secondBestNormEnergy = 0;
+      const minPeakThreshold = globalMaxPeak * 0.15;
 
       for (let m = 0; m < M; m++) {
-        this.peakEnergies[m] = Math.max(energies[m], this.peakEnergies[m] * 0.998);
-        const normE = energies[m] / Math.max(1e-6, this.peakEnergies[m]);
+        const normE = energies[m] / Math.max(minPeakThreshold, this.peakEnergies[m]);
         if (normE > maxNormEnergy) {
           secondBestNormEnergy = maxNormEnergy;
           maxNormEnergy = normE;
@@ -1141,8 +1200,8 @@ export class FSKDemodulator {
       // Symbol Clock Recovery (Second-order DPLL)
       let transitionDetected = false;
       if (scheme === '2FSK') {
-        const normSpace = energies[0] / Math.max(1e-6, this.peakEnergies[0]);
-        const normMark = energies[1] / Math.max(1e-6, this.peakEnergies[1]);
+        const normSpace = energies[0] / Math.max(minPeakThreshold, this.peakEnergies[0]);
+        const normMark = energies[1] / Math.max(minPeakThreshold, this.peakEnergies[1]);
         const disc = normMark - normSpace;
         if (this.lastDiscriminator * disc < 0) {
           transitionDetected = true;

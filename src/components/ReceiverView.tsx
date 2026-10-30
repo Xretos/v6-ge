@@ -94,12 +94,29 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
   const demodulatorRef = useRef<FSKDemodulator | null>(null);
   const fileAssemblerRef = useRef<FileAssembler | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const activeTonesRef = useRef<number[]>([1200, 2200]);
+
+  // Keep active tones ref updated with selected preset
+  useEffect(() => {
+    const preset = SPEED_PRESETS[selectedPresetId];
+    if (preset?.frequencies && preset.frequencies.length > 0) {
+      activeTonesRef.current = [...preset.frequencies];
+    } else {
+      activeTonesRef.current = [preset?.spaceFreq || 2200, preset?.markFreq || 1200];
+    }
+  }, [selectedPresetId]);
 
   // Initialize demodulator and file assembler
   useEffect(() => {
     const preset = SPEED_PRESETS[selectedPresetId];
     const modulationScheme = preset?.modulationScheme || '2FSK';
     const frequencies = preset?.frequencies;
+
+    if (frequencies && frequencies.length > 0) {
+      activeTonesRef.current = [...frequencies];
+    } else {
+      activeTonesRef.current = [preset?.spaceFreq || 2200, preset?.markFreq || 1200];
+    }
 
     const demod = new FSKDemodulator({
       sampleRate,
@@ -134,14 +151,14 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     };
 
     assembler.onComplete = (file) => {
-      setReceivedFiles((prev) => [file, ...prev]);
+      setReceivedFiles((prev) => [file, ...prev.filter((f) => f.name !== file.name)]);
       setActiveFileProgress(null);
       setActiveTransferInfo(null);
       setStatusMessage(`✓ 文件 [${file.name}] 已成功重组接收完毕 (${file.size} 字节，CRC-16 校验 ${file.crcValid ? '通过' : '失败'})`);
     };
 
     fileAssemblerRef.current = assembler;
-  }, [sampleRate, baudRate, markFreq, spaceFreq]);
+  }, [sampleRate, baudRate, markFreq, spaceFreq, selectedPresetId]);
 
   const handleCopyMissingChunks = () => {
     if (!fileAssemblerRef.current) return;
@@ -164,6 +181,17 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
     }
   };
 
+  const handleManualAssemble = () => {
+    if (!fileAssemblerRef.current) return;
+    const assembled = fileAssemblerRef.current.finalizeFile();
+    if (assembled) {
+      setReceivedFiles((prev) => [assembled, ...prev.filter((f) => f.name !== assembled.name)]);
+      setActiveFileProgress(null);
+      setActiveTransferInfo(null);
+      setStatusMessage(`✓ 文件 [${assembled.name}] 已手动合并重组成功 (${assembled.size} 字节)`);
+    }
+  };
+
   const handleNewPacket = useCallback((pkt: DecodedPacket) => {
     setPackets((prev) => [pkt, ...prev.slice(0, 49)]);
     if (pkt.crcValid) {
@@ -177,8 +205,15 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
     // Feed to File Assembler
     if (fileAssemblerRef.current && pkt.crcValid) {
-      fileAssemblerRef.current.processPacket(pkt);
-      setActiveTransferInfo(fileAssemblerRef.current.getActiveTransfer());
+      const assembled = fileAssemblerRef.current.processPacket(pkt);
+      if (assembled) {
+        setReceivedFiles((prev) => [assembled, ...prev.filter((f) => f.name !== assembled.name)]);
+        setActiveFileProgress(null);
+        setActiveTransferInfo(null);
+        setStatusMessage(`✓ 文件 [${assembled.name}] 接收完成并成功合并重组 (${assembled.size} 字节，CRC-16 校验通过)`);
+      } else {
+        setActiveTransferInfo(fileAssemblerRef.current.getActiveTransfer());
+      }
     }
   }, []);
 
@@ -207,6 +242,17 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
 
     const timeData = new Uint8Array(analyser.fftSize);
     const freqData = new Uint8Array(analyser.frequencyBinCount);
+
+    const PALETTE = [
+      '#06b6d4', // Cyan (f0)
+      '#10b981', // Emerald (f1)
+      '#f59e0b', // Amber (f2)
+      '#c084fc', // Purple (f3)
+      '#f43f5e', // Rose (f4)
+      '#38bdf8', // Sky (f5)
+      '#a3e635', // Lime (f6)
+      '#fb923c', // Orange (f7)
+    ];
 
     const render = () => {
       analyser.getByteTimeDomainData(timeData);
@@ -237,36 +283,49 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
       }
       waveCtx.stroke();
 
-      // 2. Frequency spectrum
+      // 2. Dynamic Frequency Spectrum for active M-FSK tones
       const sWidth = specCanvas.width;
       const sHeight = specCanvas.height;
       specCtx.fillStyle = '#070a12';
       specCtx.fillRect(0, 0, sWidth, sHeight);
 
-      const binHz = (sampleRate || 48000) / 1024;
-      const markBin = Math.round(markFreq / binHz);
-      const spaceBin = Math.round(spaceFreq / binHz);
+      const currentFs = audioCtxRef.current?.sampleRate || sampleRate || 48000;
+      const binHz = currentFs / 1024;
+      const tones = activeTonesRef.current && activeTonesRef.current.length > 0
+        ? activeTonesRef.current
+        : [1200, 2200];
+      const toneBins = tones.map((f) => Math.round(f / binHz));
 
       const totalBins = Math.floor(freqData.length / 2);
       const barWidth = (sWidth / totalBins) * 1.5;
       let barX = 0;
       for (let i = 0; i < totalBins; i++) {
         const barHeight = (freqData[i] / 255) * sHeight;
-        const isMark = Math.abs(i - markBin) <= 3;
-        const isSpace = Math.abs(i - spaceBin) <= 3;
-        specCtx.fillStyle = isMark ? '#06b6d4' : isSpace ? '#10b981' : '#1e293b';
+        
+        let matchedToneIdx = -1;
+        for (let t = 0; t < toneBins.length; t++) {
+          if (Math.abs(i - toneBins[t]) <= 2) {
+            matchedToneIdx = t;
+            break;
+          }
+        }
+
+        specCtx.fillStyle = matchedToneIdx !== -1 ? PALETTE[matchedToneIdx % PALETTE.length] : '#1e293b';
         specCtx.fillRect(barX, sHeight - barHeight, barWidth - 1, barHeight);
         barX += barWidth;
       }
 
-      // Dynamic Mark and Space labels
-      const markX = Math.min(sWidth - 90, Math.max(10, (markBin / totalBins) * sWidth - 25));
-      const spaceX = Math.min(sWidth - 90, Math.max(10, (spaceBin / totalBins) * sWidth - 25));
-      specCtx.fillStyle = '#38bdf8';
-      specCtx.font = '10px monospace';
-      specCtx.fillText(`${markFreq}Hz(M)`, markX, 14);
-      specCtx.fillStyle = '#34d399';
-      specCtx.fillText(`${spaceFreq}Hz(S)`, spaceX, 14);
+      // Dynamic Tone markers above peaks
+      specCtx.font = '9px monospace';
+      for (let t = 0; t < tones.length; t++) {
+        const toneFreq = tones[t];
+        const toneBin = toneBins[t];
+        const color = PALETTE[t % PALETTE.length];
+        const toneX = Math.min(sWidth - 55, Math.max(3, (toneBin / totalBins) * sWidth - 18));
+        const toneY = 12 + (t % 2) * 11;
+        specCtx.fillStyle = color;
+        specCtx.fillText(`f${t}:${toneFreq}`, toneX, toneY);
+      }
 
       // RMS meter update
       let sum = 0;
@@ -438,9 +497,10 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {Object.values(SPEED_PRESETS).map((p) => {
+                {Array.from(new Set(Object.values(SPEED_PRESETS))).map((p) => {
                   const isActive = selectedPresetId === p.id;
                   const is4FSK = p.modulationScheme === '4FSK';
+                  const is8FSK = p.modulationScheme === '8FSK';
                   return (
                     <button
                       key={p.id}
@@ -461,15 +521,28 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                               4-FSK
                             </span>
                           )}
+                          {is8FSK && (
+                            <span className="text-[9px] px-1 bg-purple-950 text-purple-300 border border-purple-800 rounded font-normal">
+                              8-FSK
+                            </span>
+                          )}
                         </span>
                         <span className={`text-[10px] font-mono px-1 rounded ${
-                          p.speedMultiplier >= 20 ? 'bg-amber-950 text-amber-400 border border-amber-800' : 'bg-slate-900 text-slate-400'
+                          p.speedMultiplier >= 30
+                            ? 'bg-purple-950 text-purple-300 border border-purple-800'
+                            : p.speedMultiplier >= 20
+                            ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                            : 'bg-slate-900 text-slate-400'
                         }`}>
                           {p.speedMultiplier}x
                         </span>
                       </div>
                       <div className="text-[10px] text-slate-400 truncate mt-1">
-                        {p.id === '2000_4fsk'
+                        {p.id === '3000_8fsk'
+                          ? '🚀 8-FSK 3000bps'
+                          : p.id === '6000_8fsk'
+                          ? '⚡ 8-FSK 6000bps'
+                          : p.id === '2000_4fsk'
                           ? '⚡ 4-FSK 推荐 0丢包'
                           : p.id === '4000'
                           ? '🔥 4000bps 极速'
@@ -635,8 +708,12 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
               </div>
 
               <div>
-                <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                  <span>频域能量 FFT 频谱 (Mark 1200Hz / Space 2200Hz)</span>
+                <div className="flex justify-between items-center text-[11px] text-slate-400 mb-1">
+                  <span className="text-white font-medium">
+                    频域 FFT 能量分布 ({SPEED_PRESETS[selectedPresetId]?.modulationScheme || '2FSK'} · {
+                      (SPEED_PRESETS[selectedPresetId]?.frequencies || [SPEED_PRESETS[selectedPresetId]?.spaceFreq, SPEED_PRESETS[selectedPresetId]?.markFreq]).join('/')
+                    } Hz)
+                  </span>
                   <span className="font-mono text-cyan-400">正交解调匹配</span>
                 </div>
                 <div className="rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
@@ -741,8 +818,24 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                     </p>
                   </div>
                 ) : (
-                  <div className="p-2 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs">
-                    ✓ 全部分卷已就绪，正在完成全文件 CRC-16 组装！
+                  <div className="p-3 rounded-lg bg-emerald-950/80 border border-emerald-600/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                        <CheckCircle className="w-4 h-4 text-emerald-400" />
+                        🎉 全部分卷已齐备 ({activeTransferInfo.receivedChunks}/{activeTransferInfo.totalChunks})！
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleManualAssemble}
+                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded text-xs transition cursor-pointer shadow flex items-center gap-1"
+                      >
+                        <FileCheck className="w-3.5 h-3.5" />
+                        <span>立即合并重组文件</span>
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-emerald-400/80">
+                      所有分卷数据完整无缺，点击上方按钮即可立即生成完整文件供下载与预览。
+                    </p>
                   </div>
                 )}
 
