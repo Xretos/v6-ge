@@ -1179,7 +1179,7 @@ export class FSKDemodulator {
       let bestTone = 0;
       let maxNormEnergy = -1;
       let secondBestNormEnergy = 0;
-      const minPeakThreshold = globalMaxPeak * 0.15;
+      const minPeakThreshold = globalMaxPeak * 0.6;
 
       for (let m = 0; m < M; m++) {
         const normE = energies[m] / Math.max(minPeakThreshold, this.peakEnergies[m]);

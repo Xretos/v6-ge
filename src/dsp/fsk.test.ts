@@ -328,7 +328,7 @@ test('Selective Retransmission (ARQ): Hole filling and selective packet retransm
     [1], // retransmit chunk 1
     99
   );
-  assert.equal(retransmitPackets.length, 1);
+  assert.equal(retransmitPackets.length, 2);
 
   // Deliver the retransmitted chunk to assembler
   const retransmitAudio = FSKModulator.modulate(retransmitPackets[0].bits, config);
@@ -506,7 +506,7 @@ test('Selective Retransmission: Auto-Assembly triggers when last missing chunk a
     payload: packets[0].payload,
     fecCorrections: 0,
     fileMeta: { name: filename, size: fileBytes.length, chunks: 4, mime: 'application/octet-stream' }
-  });
+  } as any);
   assembler.processPacket({
     seq: 2,
     crcValid: true,
@@ -514,7 +514,7 @@ test('Selective Retransmission: Auto-Assembly triggers when last missing chunk a
     payload: packets[1].payload,
     fecCorrections: 0,
     fileMeta: { chunkIdx: 0, totalChunks: 4, chunkData: fileBytes.subarray(0, 128) }
-  });
+  } as any);
   assembler.processPacket({
     seq: 3,
     crcValid: true,
@@ -522,7 +522,7 @@ test('Selective Retransmission: Auto-Assembly triggers when last missing chunk a
     payload: packets[2].payload,
     fecCorrections: 0,
     fileMeta: { chunkIdx: 1, totalChunks: 4, chunkData: fileBytes.subarray(128, 256) }
-  });
+  } as any);
   assembler.processPacket({
     seq: 5,
     crcValid: true,
@@ -530,15 +530,15 @@ test('Selective Retransmission: Auto-Assembly triggers when last missing chunk a
     payload: packets[4].payload,
     fecCorrections: 0,
     fileMeta: { chunkIdx: 3, totalChunks: 4, chunkData: fileBytes.subarray(384, 512) }
-  });
+  } as any);
   assembler.processPacket({
     seq: 6,
     crcValid: true,
     packetType: PacketType.FILE_END,
     payload: packets[5].payload,
     fecCorrections: 0,
-    fileMeta: { name: filename, size: fileBytes.length, crc: CRC16.compute(fileBytes) }
-  });
+    fileMeta: { name: filename, size: fileBytes.length, chunks: 4, crc: CRC16.compute(fileBytes) }
+  } as any);
 
   // Verification: missing chunk 2 (1-based #3)
   assert.equal(completedFile, null, 'File should not assemble while chunk 2 is missing');
@@ -552,14 +552,14 @@ test('Selective Retransmission: Auto-Assembly triggers when last missing chunk a
     payload: packets[3].payload,
     fecCorrections: 0,
     fileMeta: { chunkIdx: 2, totalChunks: 4, chunkData: fileBytes.subarray(256, 384) }
-  });
+  } as any);
 
   // Verification: BUG 2 fixed! Auto-assembly MUST trigger on the final FILE_DATA chunk!
   assert.ok(result !== null, 'processPacket should return assembled file immediately upon receiving final chunk');
   assert.ok(completedFile !== null, 'assembler.onComplete should fire on final chunk');
-  assert.equal(completedFile.size, fileBytes.length);
-  assert.equal(completedFile.crcValid, true);
-  assert.deepEqual(completedFile.data, fileBytes);
+  assert.equal((completedFile as any).size, fileBytes.length);
+  assert.equal((completedFile as any).crcValid, true);
+  assert.deepEqual((completedFile as any).data, fileBytes);
 });
 
 

@@ -534,7 +534,7 @@
           let bestTone = 0;
           let maxNorm = -1;
           let secondNorm = 0;
-          const minPeakFloor = globalMaxPeak * 0.15;
+          const minPeakFloor = globalMaxPeak * 0.6;
           for (let m = 0; m < M; m++) {
             const norm = energies[m] / Math.max(minPeakFloor, this.peakEnergies[m]);
             if (norm > maxNorm) {
