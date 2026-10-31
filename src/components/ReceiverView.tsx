@@ -540,8 +540,12 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({ sampleRate, syntheti
                       <div className="text-[10px] text-slate-400 truncate mt-1">
                         {p.id === '3000_8fsk'
                           ? '🚀 8-FSK 3000bps'
+                          : p.id === '4500_8fsk'
+                          ? '💎 8-FSK 4500bps (首选)'
                           : p.id === '6000_8fsk'
-                          ? '⚡ 8-FSK 6000bps'
+                          ? '⚡ 8-FSK 6000bps (整频)'
+                          : p.id === '7200_8fsk'
+                          ? '🔥 8-FSK 7200bps (极速)'
                           : p.id === '2000_4fsk'
                           ? '⚡ 4-FSK 推荐 0丢包'
                           : p.id === '4000'

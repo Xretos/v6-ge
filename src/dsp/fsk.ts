@@ -273,28 +273,62 @@ export const SPEED_PRESETS: Record<string, SpeedPreset> = {
     throughputDesc: '有效 ~354 字节/秒 (纯CRC)',
     est500kDuration: '约 23.5 分钟 (纯CRC模式)',
   },
+  '4500_8fsk': {
+    id: '4500_8fsk',
+    name: '4500 bps (💎 8-FSK 黄金高稳档 1500 Baud · 4.5kbps)',
+    baudRate: 1500,
+    modulationScheme: '8FSK',
+    bitRate: 4500,
+    markFreq: 6000,
+    spaceFreq: 1500,
+    frequencies: [1500, 3000, 4500, 6000, 7500, 9000, 10500, 12000],
+    recommendedChunkSize: 256,
+    recommendedUseFEC: false,
+    speedMultiplier: 45,
+    description: '1500 Baud × 3比特，严格48kHz整数傅里叶频元(1.5k-12kHz)！零载波串扰，兼顾极速与抗噪，大卷首推！',
+    throughputDesc: '有效 ~531 字节/秒 (纯CRC)',
+    est500kDuration: '约 15.6 分钟 (500kB极速)',
+  },
   '6000_8fsk': {
     id: '6000_8fsk',
-    name: '6000 bps (⚡ 8-FSK 翻3倍超频 2000 Baud · 6kbps)',
+    name: '6000 bps (⚡ 8-FSK 严格正交整频 2000 Baud · 6kbps)',
     baudRate: 2000,
     modulationScheme: '8FSK',
     bitRate: 6000,
-    markFreq: 7000,
-    spaceFreq: 1000,
-    frequencies: [1000, 2500, 4000, 5500, 7000, 8500, 10000, 11500],
-    recommendedChunkSize: 512,
+    markFreq: 8000,
+    spaceFreq: 2000,
+    frequencies: [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000],
+    recommendedChunkSize: 256,
     recommendedUseFEC: false,
     speedMultiplier: 60,
-    description: '8频点2000 Baud超频极速，单符号传输3比特，瞬时吞吐达6000 bps！',
+    description: '2000 Baud严格整数正交频点(2k-16kHz)，零频间泄漏，搭配全频带校准前导码，稳定性大幅提升！',
     throughputDesc: '有效 ~708 字节/秒 (纯CRC)',
     est500kDuration: '约 11.8 分钟 (纯CRC模式)',
+  },
+  '7200_8fsk': {
+    id: '7200_8fsk',
+    name: '7200 bps (🚀 8-FSK 极速超频 2400 Baud · 7.2kbps)',
+    baudRate: 2400,
+    modulationScheme: '8FSK',
+    bitRate: 7200,
+    markFreq: 9600,
+    spaceFreq: 2400,
+    frequencies: [2400, 4800, 7200, 9600, 12000, 14400, 16800, 19200],
+    recommendedChunkSize: 256,
+    recommendedUseFEC: false,
+    speedMultiplier: 72,
+    description: '2400 Baud × 3比特极速挑战，理论吞吐超 850 字节/秒，适合高质量对录线连接！',
+    throughputDesc: '有效 ~850 字节/秒 (纯CRC)',
+    est500kDuration: '约 9.8 分钟 (500kB挑战)',
   },
 };
 
 // Legacy compatibility aliases
 SPEED_PRESETS['2000'] = SPEED_PRESETS['2000_4fsk'];
 SPEED_PRESETS['3000'] = SPEED_PRESETS['3000_8fsk'];
+SPEED_PRESETS['4500'] = SPEED_PRESETS['4500_8fsk'];
 SPEED_PRESETS['6000'] = SPEED_PRESETS['6000_8fsk'];
+SPEED_PRESETS['7200'] = SPEED_PRESETS['7200_8fsk'];
 
 export enum PacketType {
   TEXT = 0,
@@ -351,7 +385,17 @@ export class FrameEncoder {
         bits.push(0, 0, 1, 0);
       }
     } else if (scheme === '8FSK') {
-      // 32 alternating symbols between tone 0 (bits 0,0,0) and tone 7 (bits 1,0,0)
+      // 1. Full-spectrum calibration sweep across all 8 tones (calibrates receiver AGC & tone equalizers)
+      const TONE_BITS: number[][] = [
+        [0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0],
+        [1, 1, 0], [1, 1, 1], [1, 0, 1], [1, 0, 0]
+      ];
+      // Sweep through all tones up and down twice (32 symbols):
+      for (let sweep = 0; sweep < 2; sweep++) {
+        for (let t = 0; t < 8; t++) bits.push(...TONE_BITS[t]);
+        for (let t = 7; t >= 0; t--) bits.push(...TONE_BITS[t]);
+      }
+      // 2. High-contrast alternating Low-High tones (Tone 0 and Tone 7) for sharp DPLL edge sync (32 symbols)
       for (let i = 0; i < 16; i++) {
         bits.push(0, 0, 0, 1, 0, 0);
       }
@@ -1002,6 +1046,34 @@ export class FSKModulator {
 
     return output;
   }
+
+  /**
+   * Generates a 120ms gentle calibration & wake-up tone with soft cosine ramping.
+   * Plays before file transfer / retransmit start to awaken phone DAC from power-saving,
+   * un-mute hardware output, and settle receiver microphone AGC into linear range.
+   */
+  static generateWakeupTone(
+    sampleRate: number,
+    frequency: number = 2000,
+    durationSec: number = 0.12,
+    amplitude: number = 0.5
+  ): Float32Array {
+    const totalSamples = Math.round(sampleRate * durationSec);
+    const output = new Float32Array(totalSamples);
+    const twoPi = 2 * Math.PI;
+    const rampSamples = Math.round(sampleRate * 0.02);
+
+    for (let n = 0; n < totalSamples; n++) {
+      let env = 1.0;
+      if (n < rampSamples) {
+        env = 0.5 * (1 - Math.cos((Math.PI * n) / rampSamples));
+      } else if (n > totalSamples - rampSamples) {
+        env = 0.5 * (1 + Math.cos((Math.PI * (n - (totalSamples - rampSamples))) / rampSamples));
+      }
+      output[n] = amplitude * env * Math.sin((twoPi * frequency * n) / sampleRate);
+    }
+    return output;
+  }
 }
 
 // ============================================================================
@@ -1157,7 +1229,7 @@ export class FSKDemodulator {
       // Squelch threshold: if audio level is too quiet (< -40 dBFS), skip bit decisions
       if (rms < 0.004 || totalCarrierEnergy < 1e-7) {
         for (let m = 0; m < M; m++) {
-          this.peakEnergies[m] = Math.max(0.001, this.peakEnergies[m] * 0.99);
+          this.peakEnergies[m] = Math.max(0.005, this.peakEnergies[m] * 0.99995);
         }
         this.sampleBuffer.splice(0, S);
         processedSamples += S;
@@ -1220,8 +1292,8 @@ export class FSKDemodulator {
         if (phaseError > N / 2) {
           phaseError -= N;
         }
-        this.clockPhase -= phaseError * 0.4;
-        this.clockFreqAdjust = Math.max(-1.5, Math.min(1.5, this.clockFreqAdjust - phaseError * 0.02));
+        this.clockPhase -= phaseError * 0.25;
+        this.clockFreqAdjust = Math.max(-0.4, Math.min(0.4, this.clockFreqAdjust - phaseError * 0.005));
       }
 
       // Advance symbol clock with crystal PPM drift compensation

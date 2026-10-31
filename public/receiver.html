@@ -229,7 +229,9 @@
             <option value="2000_4fsk" selected>2000 bps (⚡ 4-FSK 高稳推荐 · 1000 Baud, 1k/2k/3k/4kHz)</option>
             <option value="4000">4000 bps (🔥 4-FSK 翻倍极速 · 2000 Baud, 1k/3k/5k/7kHz)</option>
             <option value="3000_8fsk">3000 bps (🚀 8-FSK 3比特/码元 · 1000 Baud, 1k-8kHz)</option>
-            <option value="6000_8fsk">6000 bps (⚡ 8-FSK 翻3倍超频 · 2000 Baud, 6kbps)</option>
+            <option value="4500_8fsk">4500 bps (💎 8-FSK 黄金高稳推荐 · 1500 Baud, 1.5k-12kHz)</option>
+            <option value="6000_8fsk">6000 bps (⚡ 8-FSK 严格正交整频 · 2000 Baud, 2k-16kHz)</option>
+            <option value="7200_8fsk">7200 bps (🔥 8-FSK 极速超频 · 2400 Baud, 2.4k-19.2kHz)</option>
           </select>
         </div>
         <div>
@@ -513,7 +515,7 @@
           const rms = Math.sqrt(sumSq / N);
           if (rms < 0.004) {
             for (let m = 0; m < M; m++) {
-              this.peakEnergies[m] = Math.max(0.001, this.peakEnergies[m] * 0.99);
+              this.peakEnergies[m] = Math.max(0.005, this.peakEnergies[m] * 0.99995);
             }
             this.sampleBuffer.splice(0, S);
             this.clockPhase = 0;
@@ -567,8 +569,8 @@
           if (trans) {
             let phaseError = this.clockPhase;
             if (phaseError > N / 2) phaseError -= N;
-            this.clockPhase -= phaseError * 0.4;
-            this.clockFreqAdjust = Math.max(-1.5, Math.min(1.5, this.clockFreqAdjust - phaseError * 0.02));
+            this.clockPhase -= phaseError * 0.25;
+            this.clockFreqAdjust = Math.max(-0.4, Math.min(0.4, this.clockFreqAdjust - phaseError * 0.005));
           }
 
           const prevClock = this.clockPhase;
@@ -1049,11 +1051,21 @@
           scheme = '8FSK';
           frequencies = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
           markFreq = 4000; spaceFreq = 1000;
+        } else if (rxMode === '4500_8fsk') {
+          baudRate = 1500;
+          scheme = '8FSK';
+          frequencies = [1500, 3000, 4500, 6000, 7500, 9000, 10500, 12000];
+          markFreq = 6000; spaceFreq = 1500;
         } else if (rxMode === '6000_8fsk') {
           baudRate = 2000;
           scheme = '8FSK';
-          frequencies = [1000, 2500, 4000, 5500, 7000, 8500, 10000, 11500];
-          markFreq = 7000; spaceFreq = 1000;
+          frequencies = [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000];
+          markFreq = 8000; spaceFreq = 2000;
+        } else if (rxMode === '7200_8fsk') {
+          baudRate = 2400;
+          scheme = '8FSK';
+          frequencies = [2400, 4800, 7200, 9600, 12000, 14400, 16800, 19200];
+          markFreq = 9600; spaceFreq = 2400;
         } else if (rxMode === '2000_4fsk') {
           baudRate = 1000;
           scheme = '4FSK';

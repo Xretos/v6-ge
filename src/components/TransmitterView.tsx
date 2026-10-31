@@ -362,6 +362,26 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
     setIsPaused(false);
     setIsTransmitting(true);
 
+    // Pre-flight hardware DAC & AGC wake-up pulse (120ms):
+    // Awaken phone DAC from sleep, un-mute hardware audio, and settle receiver mic AGC before FILE_START
+    setStatusText('正在发射硬件唤醒导频与 AGC 校准信号 (120ms)...');
+    const wakeupSamples = FSKModulator.generateWakeupTone(
+      actualSampleRate,
+      frequencies?.[0] ?? markFreq,
+      0.12,
+      (volume / 100) * 0.5
+    );
+    const wakeupBuf = ctx.createBuffer(1, wakeupSamples.length, actualSampleRate);
+    wakeupBuf.getChannelData(0).set(wakeupSamples);
+    await new Promise<void>((resolve) => {
+      const source = ctx.createBufferSource();
+      source.buffer = wakeupBuf;
+      source.connect(ctx.destination);
+      source.onended = () => resolve();
+      source.start();
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
     setStatusText(`开始通过音频传输文件: ${selectedFile.name} (共 ${packets.length} 帧)...`);
 
     let sentPktCounter = 0;
@@ -596,6 +616,24 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
     setIsPaused(false);
     setIsTransmitting(true);
 
+    // Pre-flight hardware DAC & AGC wake-up pulse (120ms):
+    const wakeupSamples = FSKModulator.generateWakeupTone(
+      actualSampleRate,
+      frequencies?.[0] ?? markFreq,
+      0.12,
+      (volume / 100) * 0.5
+    );
+    const wakeupBuf = ctx.createBuffer(1, wakeupSamples.length, actualSampleRate);
+    wakeupBuf.getChannelData(0).set(wakeupSamples);
+    await new Promise<void>((resolve) => {
+      const source = ctx.createBufferSource();
+      source.buffer = wakeupBuf;
+      source.connect(ctx.destination);
+      source.onended = () => resolve();
+      source.start();
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
     for (let i = 0; i < packets.length; i++) {
       if (isCancelledRef.current) break;
       while (isPausedRef.current) {
@@ -792,8 +830,12 @@ export const TransmitterView: React.FC<TransmitterViewProps> = ({ sampleRate, on
                         <div className="text-[10px] text-slate-400 truncate mt-0.5">
                           {p.id === '3000_8fsk'
                             ? '🚀 8-FSK 3000bps'
+                            : p.id === '4500_8fsk'
+                            ? '💎 8-FSK 4500bps (首选)'
                             : p.id === '6000_8fsk'
-                            ? '⚡ 8-FSK 6000bps'
+                            ? '⚡ 8-FSK 6000bps (整频)'
+                            : p.id === '7200_8fsk'
+                            ? '🔥 8-FSK 7200bps (极速)'
                             : p.id === '2000_4fsk'
                             ? '⚡ 4-FSK 高稳大卷'
                             : p.id === '4000'

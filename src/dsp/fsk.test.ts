@@ -562,6 +562,69 @@ test('Selective Retransmission: Auto-Assembly triggers when last missing chunk a
   assert.deepEqual((completedFile as any).data, fileBytes);
 });
 
+test('Hardware Wakeup Tone: Generates 120ms non-empty soft cosine tapered audio burst', () => {
+  const tone = FSKModulator.generateWakeupTone(48000, 2000, 0.12, 0.5);
+  assert.equal(tone.length, Math.round(48000 * 0.12));
+  assert.equal(tone[0], 0, 'First sample should be smoothly zero due to Hann ramp');
+  let maxAmp = 0;
+  for (let i = 0; i < tone.length; i++) {
+    if (Math.abs(tone[i]) > maxAmp) maxAmp = Math.abs(tone[i]);
+  }
+  assert.ok(maxAmp > 0.45 && maxAmp <= 0.5, 'Max amplitude should reach specified level');
+});
+
+test('8-FSK 4500 bps (1500 Baud, 8 tones, 256B large chunks): 100% transmission success', () => {
+  const payload = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) payload[i] = (i * 31 + 17) & 0xff;
+
+  const config = {
+    sampleRate: 48000,
+    baudRate: 1500,
+    modulationScheme: '8FSK' as const,
+    markFreq: 6000,
+    spaceFreq: 1500,
+    frequencies: [1500, 3000, 4500, 6000, 7500, 9000, 10500, 12000],
+    amplitude: 0.85,
+    useFEC: false,
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 50, false, PacketType.FILE_DATA, '8FSK');
+  const audio = FSKModulator.modulate(bits, config);
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audio);
+
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0].seq, 50);
+  assert.equal(packets[0].crcValid, true);
+  assert.deepEqual(packets[0].payload, payload);
+});
+
+test('8-FSK 6000 bps Exact Integer Fourier Bins (2000 Baud, 256B chunks): 100% CRC validation', () => {
+  const payload = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) payload[i] = (i * 19 + 43) & 0xff;
+
+  const config = {
+    sampleRate: 48000,
+    baudRate: 2000,
+    modulationScheme: '8FSK' as const,
+    markFreq: 8000,
+    spaceFreq: 2000,
+    frequencies: [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000],
+    amplitude: 0.85,
+    useFEC: false,
+  };
+
+  const bits = FrameEncoder.encodePacketToBits(payload, 77, false, PacketType.FILE_DATA, '8FSK');
+  const audio = FSKModulator.modulate(bits, config);
+  const demodulator = new FSKDemodulator(config);
+  const packets = demodulator.processAudioBuffer(audio);
+
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0].seq, 77);
+  assert.equal(packets[0].crcValid, true);
+  assert.deepEqual(packets[0].payload, payload);
+});
+
 
 
 

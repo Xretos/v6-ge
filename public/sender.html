@@ -217,7 +217,9 @@
             <option value="2000_4fsk" selected>2000 bps (⚡ 4-FSK 高稳大卷推荐 · 1000 Baud, 1k/2k/3k/4k · 解决丢包！)</option>
             <option value="4000">4000 bps (🔥 4-FSK 翻倍极速 · 2000 Baud, 1k/3k/5k/7k)</option>
             <option value="3000_8fsk">3000 bps (🚀 8-FSK 3比特/码元 · 1000 Baud, 1k-8kHz)</option>
-            <option value="6000_8fsk">6000 bps (⚡ 8-FSK 翻3倍超频 · 2000 Baud, 6kbps)</option>
+            <option value="4500_8fsk">4500 bps (💎 8-FSK 黄金高稳推荐 · 1500 Baud, 1.5k-12kHz)</option>
+            <option value="6000_8fsk">6000 bps (⚡ 8-FSK 严格正交整频 · 2000 Baud, 2k-16kHz)</option>
+            <option value="7200_8fsk">7200 bps (🔥 8-FSK 极速超频 · 2400 Baud, 2.4k-19.2kHz)</option>
           </select>
         </div>
         <div>
@@ -477,6 +479,20 @@
         for (let i = 0; i < 16; i++) {
           bits.push(0, 0, 1, 0);
         }
+      } else if (scheme === '8FSK') {
+        // 1. Full-spectrum calibration sweep across all 8 tones (calibrates receiver AGC & tone equalizers)
+        const TONE_BITS = [
+          [0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0],
+          [1, 1, 0], [1, 1, 1], [1, 0, 1], [1, 0, 0]
+        ];
+        for (let sweep = 0; sweep < 2; sweep++) {
+          for (let t = 0; t < 8; t++) bits.push(...TONE_BITS[t]);
+          for (let t = 7; t >= 0; t--) bits.push(...TONE_BITS[t]);
+        }
+        // 2. High-contrast alternating Low-High tones (Tone 0 and Tone 7) for sharp DPLL edge sync (32 symbols)
+        for (let i = 0; i < 16; i++) {
+          bits.push(0, 0, 0, 1, 0, 0);
+        }
       } else {
         for (const b of PREAMBLE_BITS) bits.push(b);
       }
@@ -566,14 +582,32 @@
           markFreq: 4000,
           spaceFreq: 1000,
         };
+      } else if (mode === '4500_8fsk') {
+        return {
+          baudRate: 1500,
+          bitRate: 4500,
+          scheme: '8FSK',
+          frequencies: [1500, 3000, 4500, 6000, 7500, 9000, 10500, 12000],
+          markFreq: 6000,
+          spaceFreq: 1500,
+        };
       } else if (mode === '6000_8fsk') {
         return {
           baudRate: 2000,
           bitRate: 6000,
           scheme: '8FSK',
-          frequencies: [1000, 2500, 4000, 5500, 7000, 8500, 10000, 11500],
-          markFreq: 7000,
-          spaceFreq: 1000,
+          frequencies: [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000],
+          markFreq: 8000,
+          spaceFreq: 2000,
+        };
+      } else if (mode === '7200_8fsk') {
+        return {
+          baudRate: 2400,
+          bitRate: 7200,
+          scheme: '8FSK',
+          frequencies: [2400, 4800, 7200, 9600, 12000, 14400, 16800, 19200],
+          markFreq: 9600,
+          spaceFreq: 2400,
         };
       } else if (mode === '2000_4fsk') {
         return {
@@ -820,6 +854,20 @@
       });
     }
 
+    function generateWakeupTone(sampleRate, frequency = 2000, durationSec = 0.12, amplitude = 0.5) {
+      const totalSamples = Math.round(sampleRate * durationSec);
+      const output = new Float32Array(totalSamples);
+      const twoPi = 2 * Math.PI;
+      const rampSamples = Math.round(sampleRate * 0.02);
+      for (let n = 0; n < totalSamples; n++) {
+        let env = 1.0;
+        if (n < rampSamples) env = 0.5 * (1 - Math.cos((Math.PI * n) / rampSamples));
+        else if (n > totalSamples - rampSamples) env = 0.5 * (1 + Math.cos((Math.PI * (n - (totalSamples - rampSamples))) / rampSamples));
+        output[n] = amplitude * env * Math.sin((twoPi * frequency * n) / sampleRate);
+      }
+      return output;
+    }
+
     // --- TEXT SEND ---
     document.getElementById('btnSend').addEventListener('click', async () => {
       const text = msgInput.value.trim();
@@ -956,6 +1004,12 @@
       document.getElementById('fileProgressCard').style.display = 'block';
       document.getElementById('btnStop').style.display = 'block';
 
+      // Pre-flight hardware DAC/AGC wake-up pulse (120ms):
+      document.getElementById('txStatus').textContent = '正在发射硬件唤醒导频与 AGC 校准信号 (120ms)...';
+      const wakeupSamples = generateWakeupTone(sampleRate, mod.frequencies ? mod.frequencies[0] : mod.markFreq, 0.12, amplitude * 0.5);
+      await playAudioSamples(wakeupSamples, sampleRate);
+      await new Promise(r => setTimeout(r, 20));
+
       for (let i = 0; i < packets.length; i++) {
         if (isCancelled) break;
         const pkt = packets[i];
@@ -1047,6 +1101,12 @@
       isCancelled = false;
       document.getElementById('fileProgressCard').style.display = 'block';
       document.getElementById('btnStop').style.display = 'block';
+
+      // Pre-flight hardware DAC/AGC wake-up pulse (120ms):
+      document.getElementById('txStatus').textContent = '正在发射硬件唤醒导频与 AGC 校准信号 (120ms)...';
+      const wakeupSamples = generateWakeupTone(sampleRate, mod.frequencies ? mod.frequencies[0] : mod.markFreq, 0.12, amplitude * 0.5);
+      await playAudioSamples(wakeupSamples, sampleRate);
+      await new Promise(r => setTimeout(r, 20));
 
       for (let i = 0; i < packets.length; i++) {
         if (isCancelled) break;
