@@ -1,0 +1,1492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>3.5mm 音频数据/文件发送端 (OFDM Transmitter) - AudioJack Modem</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-border: #1f293d;
+      --accent: #06b6d4;
+      --accent-glow: rgba(6, 182, 212, 0.25);
+      --success: #10b981;
+      --text: #f3f4f6;
+      --text-dim: #9ca3af;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      padding: 16px;
+      line-height: 1.5;
+    }
+    .container { max-width: 640px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    h1 { font-size: 1.2rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #e5e7eb;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--text-dim); margin-bottom: 4px; }
+    input[type="text"], textarea, select {
+      width: 100%;
+      background: #0d131f;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px 12px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border 0.2s;
+    }
+    input[type="text"]:focus, textarea:focus, select:focus {
+      border-color: var(--accent);
+    }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .btn {
+      width: 100%;
+      background: var(--accent);
+      color: #000;
+      font-weight: 700;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn:hover { filter: brightness(1.1); box-shadow: 0 0 16px var(--accent-glow); }
+    .btn:active { transform: scale(0.98); }
+    .btn-secondary {
+      background: #1f2937;
+      color: #e5e7eb;
+      font-weight: 500;
+      font-size: 0.8rem;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+    }
+    .btn-danger {
+      background: #7f1d1d;
+      color: #fca5a5;
+      border: 1px solid #991b1b;
+    }
+    .tab-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 8px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-dim);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: rgba(6, 182, 212, 0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .drop-zone {
+      border: 2px dashed #2d3748;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      background: #090e18;
+      cursor: pointer;
+      margin-bottom: 12px;
+      transition: border-color 0.2s;
+    }
+    .drop-zone:hover {
+      border-color: var(--accent);
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #1a2234;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      transition: width 0.15s ease;
+    }
+    .quick-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+    .tag {
+      background: #1e293b;
+      color: #94a3b8;
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tag:hover { background: #334155; color: #fff; }
+    canvas {
+      width: 100%;
+      height: 120px;
+      background: #070a12;
+      border-radius: 8px;
+      border: 1px solid #1a2234;
+      display: block;
+    }
+    .stat-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-top: 6px; color: var(--text-dim); }
+    .stat-val { color: #38bdf8; font-family: monospace; font-weight: 600; }
+    .nav-links {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 16px;
+      font-size: 0.8rem;
+    }
+    .nav-links a { color: var(--accent); text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>📡 3.5mm 音频数据/文件发送端</h1>
+        <p style="font-size: 0.8rem; color: var(--text-dim);">OFDM + 自适应 QAM + 卷积码 · 耳机孔高速发送器 (文本 / 多包文件)</p>
+      </div>
+      <span class="badge" id="srBadge">Fs: 48000 Hz</span>
+    </header>
+
+    <!-- 调制参数设置 -->
+    <div class="card">
+      <div class="card-title">
+        <span>⚙️ OFDM 调制与信道配置</span>
+        <button class="btn btn-secondary" style="width: auto;" id="btnTone1200">2kHz 校准音</button>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <label for="modeSelect">传输档位 (调制 + 纠错码率)</label>
+          <select id="modeSelect">
+            <option value="0">BPSK 1/2 · ≈5.8 kbps · 极限抗噪 (SNR≥5dB)</option>
+            <option value="1">QPSK 1/2 · ≈11.7 kbps · 高稳 (SNR≥11dB)</option>
+            <option value="2" selected>QPSK 3/4 · ≈17.5 kbps · ⭐推荐起点 (SNR≥14dB)</option>
+            <option value="3">16QAM 1/2 · ≈23 kbps (SNR≥18dB)</option>
+            <option value="4">16QAM 3/4 · ≈35 kbps (SNR≥20dB)</option>
+            <option value="5">64QAM 3/4 · ≈52 kbps · 极速 (SNR≥26dB)</option>
+          </select>
+        </div>
+        <div>
+          <label for="bwSelect">占用带宽 (48kHz 采样)</label>
+          <select id="bwSelect">
+            <option value="0" selected>满带宽 1.1–16 kHz</option>
+            <option value="1">1.1–13 kHz (速率×0.8)</option>
+            <option value="2">1.1–10 kHz (速率×0.6)</option>
+            <option value="3">1.1–7 kHz (低通严重的设备)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <label for="passSelect">重复发送轮数 (单向链路增强)</label>
+          <select id="passSelect">
+            <option value="1" selected>1 轮</option>
+            <option value="2">2 轮 (丢包自动互补)</option>
+            <option value="3">3 轮</option>
+          </select>
+        </div>
+        <div style="display:flex; align-items:flex-end;">
+          <button class="btn btn-secondary" id="btnProbe" style="width:100%; padding:11px 10px; background:#0369a1; color:#fff; font-size:0.85rem;">📶 发送信道探测 (测最佳档位)</button>
+        </div>
+      </div>
+
+      <div>
+        <label>输出音量/电平幅度: <span id="volumeVal" class="stat-val">70% (-3.1 dB)</span></label>
+        <input type="range" id="volumeSlider" min="10" max="100" value="70">
+        <p style="font-size: 0.72rem; color: var(--text-dim); margin-top: 4px;">
+          💡 OFDM 不是恒包络信号，过载削波会直接损失 SNR。接收端提示「输入过载」时请降低音量或在对录线上加衰减；建议先点「信道探测」，接收端会给出建议档位。
+        </p>
+      </div>
+    </div>
+
+    <!-- 发送内容选项卡 -->
+    <div class="card">
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tabText" onclick="switchTab('text')">普通文本报文</button>
+        <button class="tab-btn" id="tabFile" onclick="switchTab('file')">本地文件传输 (File)</button>
+      </div>
+
+      <!-- 文本面板 -->
+      <div id="panelText">
+        <div class="card-title">
+          <span>✉️ 发送内容录入</span>
+          <span style="font-size: 0.75rem; color: var(--text-dim);" id="charCount">0 字符</span>
+        </div>
+
+        <textarea id="messageInput" rows="3" placeholder="在此输入要通过3.5mm音频孔传输的文本内容...">Hello Android via 3.5mm AudioJack!</textarea>
+
+        <div class="quick-tags">
+          <span class="tag" onclick="setMessage('PING-001')">Ping 测试包</span>
+          <span class="tag" onclick="setMessage('LAT:39.9042,LON:116.4074')">GPS 坐标</span>
+          <span class="tag" onclick="setMessage('TEMPER:24.5C,HUMI:60%')">传感器数据</span>
+          <span class="tag" onclick="setMessage('SOS EMERGENCY MSG #99')">紧急求救信</span>
+        </div>
+
+        <button class="btn" id="btnSend">
+          <span id="sendIcon">🔊</span>
+          <span id="sendBtnText">编码并发送文本音频</span>
+        </button>
+      </div>
+
+      <!-- 文件面板 -->
+      <div id="panelFile" style="display: none;">
+        <input type="file" id="filePicker" style="display: none;">
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('filePicker').click()">
+          <div style="font-size: 1.5rem; margin-bottom: 4px;">📁</div>
+          <div id="fileInfoText" style="font-size: 0.9rem; font-weight: 600; color: #fff;">点击选择本地文件</div>
+          <div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 4px;">
+            支持各类数据文件。OFDM 单卷越大开销越低，丢包可按序号选择性重传
+          </div>
+        </div>
+
+        <div class="quick-tags" style="margin-bottom: 12px;">
+          <span style="font-size: 0.75rem; color: var(--text-dim); align-self: center;">预设示例:</span>
+          <span class="tag" onclick="loadSample('config.json')">config.json</span>
+          <span class="tag" onclick="loadSample('sensor.csv')">sensor.csv</span>
+          <span class="tag" onclick="loadSample('note.txt')">note.txt</span>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <label>分卷切片大小 (Chunk Size)</label>
+            <select id="chunkSizeSelect">
+              <option value="256">256 字节 (保守)</option>
+              <option value="512">512 字节</option>
+              <option value="1024" selected>1024 字节 (⚡ 推荐)</option>
+              <option value="2048">2048 字节 (高速档大卷)</option>
+            </select>
+          </div>
+          <div>
+            <label>分卷数量与耗时预估</label>
+            <div id="fileEstimate" class="stat-val" style="padding-top: 10px; font-size: 0.85rem;">0 分卷 · 0s</div>
+          </div>
+        </div>
+
+        <div id="fileProgressCard" style="display: none; margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.8rem;">
+            <span id="fileProgressDesc" style="color: var(--accent);">正在发送分卷...</span>
+            <span id="fileProgressPercent" class="stat-val">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="fileProgressBar"></div>
+          </div>
+        </div>
+
+        <button class="btn" id="btnSendFile" style="background: var(--success); color: #000;">
+          <span>📦</span>
+          <span>开始音频文件传输</span>
+        </button>
+
+        <!-- 批量输入包序号重传 & 断点续传 -->
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--card-border);">
+          <label style="color: #38bdf8; font-weight: 600;">🔄 批量输入包序号 · 选择性重传 (ARQ)</label>
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <input type="text" id="retransmitInput" placeholder="输入包序号，如: 154 或 5, 12, 154 或 10-15" style="flex: 1;">
+            <button class="btn btn-secondary" id="btnRetransmit" style="width: auto; background: #0284c7; color: #fff; font-weight: 600; white-space: nowrap;">仅重传指定分卷</button>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-dim); margin-top: 4px;">
+            💡 提示：从接收端一键复制缺失分卷序号，直接粘贴到上方重传即可，无需重发整个文件。
+          </p>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <label style="color: var(--success); font-weight: 600;">⏩ 断点续传 (Resume)</label>
+          <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+            <span style="font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;">从第</span>
+            <input type="number" id="resumeStartInput" min="1" value="1" style="width: 70px;">
+            <span style="font-size: 0.8rem; color: var(--text-dim); white-space: nowrap;">卷续传至末尾</span>
+            <button class="btn btn-secondary" id="btnResume" style="flex: 1; background: #059669; color: #fff; font-weight: 600;">开始断点续传</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-secondary btn-danger" id="btnStop" style="margin-top: 8px; display: none;">
+        ⏹ 中止音频输出
+      </button>
+    </div>
+
+    <!-- 实时波形监测 -->
+    <div class="card">
+      <div class="card-title">
+        <span>📊 发送端实时示波器 (OFDM 波形)</span>
+        <span id="txStatus" class="stat-val" style="color: var(--text-dim);">待机空闲</span>
+      </div>
+      <canvas id="scopeCanvas"></canvas>
+
+      <div style="margin-top: 12px;">
+        <div class="stat-row">
+          <span>总发送报文数</span>
+          <span class="stat-val" id="statTxPackets">0</span>
+        </div>
+        <div class="stat-row">
+          <span>已发送总字节数</span>
+          <span class="stat-val" id="statTxBytes">0 字节</span>
+        </div>
+        <div class="stat-row">
+          <span>当前帧比特数 / 传输时长</span>
+          <span class="stat-val" id="statFrameDuration">0 bits / 0.00s</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav-links">
+      <a href="receiver.html">👉 切换到接收端网页 (receiver.html)</a>
+      <a href="./">📖 返回系统主控制台与文档</a>
+    </div>
+  </div>
+
+  <script>
+    // ==== AudioJack OFDM Modem 内核 (发送/接收共用) ====
+    // ============================================================================
+    // AudioJack OFDM Modem  —  OFDM + 自适应 QAM + 卷积码(K=7)软判决 Viterbi
+    // 发送端与接收端共用的内核 (纯 JS, 无依赖)
+    //   帧结构: [S1 同步符号][T1 训练][T2 训练][HDR x3 帧头][DATA x n]
+    //   帧头永远用 BPSK 1/2, 里面写着档位, 所以接收端无需手动选择档位
+    // ============================================================================
+    const Modem = (() => {
+      'use strict';
+
+      const N = 256;          // FFT 点数 (48kHz 下子载波间隔 187.5 Hz)
+      const CP = 32;          // 循环前缀
+      const BACK = 16;        // FFT 窗口提前量 (留给时钟漂移/多径)
+      const SYM = N + CP;     // 一个 OFDM 符号的总样点
+      const S1_PRE = 96;      // 同步符号的周期延拓前缀 (加宽检测平台)
+      const S1_LEN = S1_PRE + N;
+      const TAIL = 48;        // 帧尾循环后缀, 淡出斜坡落在这里而不会伤到最后一个符号
+      const K0 = 6;           // 第一个子载波 (约 1.1 kHz, 避开麦克风通路的低频高通)
+      const PILOT_STEP = 8;
+      const BW_LAST = [86, 70, 54, 38];  // 带宽档: 16.1k / 13.1k / 10.1k / 7.1k (@48k)
+      const HDR_BW = 1;
+      const HDR_SYMS = 3;
+      const KC = 46;          // 相位拟合的中心载波
+
+      // needSnr: 接收端实测 SNR 达到该值时建议使用 (已含约 4~5 dB 余量)
+      const MODES = [
+        { id: 0, name: 'BPSK 1/2',  bpc: 1, rate: '1/2', needSnr: 5  },
+        { id: 1, name: 'QPSK 1/2',  bpc: 2, rate: '1/2', needSnr: 11 },
+        { id: 2, name: 'QPSK 3/4',  bpc: 2, rate: '3/4', needSnr: 14 },
+        { id: 3, name: '16QAM 1/2', bpc: 4, rate: '1/2', needSnr: 18 },
+        { id: 4, name: '16QAM 3/4', bpc: 4, rate: '3/4', needSnr: 20 },
+        { id: 5, name: '64QAM 3/4', bpc: 6, rate: '3/4', needSnr: 26 },
+      ];
+      // ---------------------------------------------------------------- 工具
+      function xorshift32(seed) {
+        let s = (seed | 0) || 1;
+        return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return s >>> 0; };
+      }
+
+      let CRC32_TAB = null;
+      function crc32(data) {
+        if (!CRC32_TAB) {
+          CRC32_TAB = new Uint32Array(256);
+          for (let i = 0; i < 256; i++) {
+            let c = i;
+            for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            CRC32_TAB[i] = c >>> 0;
+          }
+        }
+        let crc = 0xFFFFFFFF;
+        for (let i = 0; i < data.length; i++) crc = CRC32_TAB[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+      }
+
+      function crc16(data) {
+        let crc = 0xffff;
+        for (let i = 0; i < data.length; i++) {
+          crc ^= data[i] << 8;
+          for (let b = 0; b < 8; b++) crc = (crc & 0x8000) ? (((crc << 1) ^ 0x1021) & 0xffff) : ((crc << 1) & 0xffff);
+        }
+        return crc & 0xffff;
+      }
+
+      // ---------------------------------------------------------------- FFT
+      const cosT = new Float64Array(N / 2), sinT = new Float64Array(N / 2);
+      for (let i = 0; i < N / 2; i++) { cosT[i] = Math.cos(2 * Math.PI * i / N); sinT[i] = Math.sin(2 * Math.PI * i / N); }
+      const bitrev = new Uint16Array(N);
+      for (let i = 0; i < N; i++) {
+        let r = 0, x = i;
+        for (let b = 0; b < Math.log2(N); b++) { r = (r << 1) | (x & 1); x >>= 1; }
+        bitrev[i] = r;
+      }
+      // 原地复数 FFT. inverse=true 时用 e^{+j..}, 不做 1/N 归一化
+      function fft(re, im, inverse) {
+        for (let i = 0; i < N; i++) {
+          const j = bitrev[i];
+          if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+        }
+        for (let size = 2; size <= N; size <<= 1) {
+          const half = size >> 1, step = N / size;
+          for (let start = 0; start < N; start += size) {
+            for (let k = 0; k < half; k++) {
+              const wr = cosT[k * step], wi = inverse ? sinT[k * step] : -sinT[k * step];
+              const a = start + k, b = a + half;
+              const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+              re[b] = re[a] - tr; im[b] = im[a] - ti;
+              re[a] += tr; im[a] += ti;
+            }
+          }
+        }
+      }
+
+      // ---------------------------------------------------------------- 载波布局
+      const layoutCache = {};
+      function layout(bw) {
+        if (layoutCache[bw]) return layoutCache[bw];
+        const last = BW_LAST[bw], pilots = [], data = [];
+        for (let k = K0; k <= last; k++) ((k - K0) % PILOT_STEP === 0 ? pilots : data).push(k);
+        return (layoutCache[bw] = { last, pilots, data });
+      }
+
+      // 固定的伪随机序列
+      const FULL_LAST = BW_LAST[0];
+      const TRAIN_SIGN = new Int8Array(N);   // 训练符号, 全部载波 BPSK
+      const S1_SIGN = new Int8Array(N);      // 同步符号, 仅偶数载波
+      const PILOT_PN = new Int8Array(127);
+      (function initSeq() {
+        const r1 = xorshift32(0x1234ABCD);
+        for (let k = K0; k <= FULL_LAST; k++) TRAIN_SIGN[k] = (r1() & 0x100) ? 1 : -1;
+        const r2 = xorshift32(0x0BADF00D);
+        for (let k = K0; k <= FULL_LAST; k += 2) S1_SIGN[k] = (r2() & 0x100) ? 1 : -1;
+        const r3 = xorshift32(0x5EED5EED);
+        for (let i = 0; i < 127; i++) PILOT_PN[i] = (r3() & 0x80) ? 1 : -1;
+      })();
+      const pilotSign = (t, i) => PILOT_PN[(t * 5 + i * 3) % 127];
+
+      // ---------------------------------------------------------------- 星座映射
+      const AXIS = {};
+      (function buildAxes() {
+        for (const m of [1, 2, 3]) {              // 每轴 1/2/3 bit => BPSK-ish(未使用)/16QAM/64QAM 的每轴
+          const M = 1 << m, levels = new Float64Array(M), bitsOf = new Uint8Array(M);
+          for (let idx = 0; idx < M; idx++) {
+            const g = idx ^ (idx >> 1);            // 格雷码
+            levels[idx] = 2 * idx - (M - 1);
+            bitsOf[idx] = g;
+          }
+          AXIS[m] = { m, M, levels, bitsOf };
+        }
+      })();
+      const QAM_NORM = { 2: 1 / Math.sqrt(2), 4: 1 / Math.sqrt(10), 6: 1 / Math.sqrt(42) };
+
+      // 一个轴: 由 m 个比特 -> 电平 (未归一化)
+      function axisLevel(bitsVal, m) {
+        const ax = AXIS[m];
+        for (let idx = 0; idx < ax.M; idx++) if (ax.bitsOf[idx] === bitsVal) return ax.levels[idx];
+        return 0;
+      }
+      const AXIS_LUT = {};
+      for (const m of [1, 2, 3]) {
+        const lut = new Float64Array(1 << m);
+        for (let v = 0; v < (1 << m); v++) lut[v] = axisLevel(v, m);
+        AXIS_LUT[m] = lut;
+      }
+
+      function mapCarrier(bits, off, bpc, out) {   // out = [I, Q]
+        if (bpc === 1) { out[0] = 1 - 2 * bits[off]; out[1] = 0; return; }
+        const m = bpc >> 1, nrm = QAM_NORM[bpc];
+        let vi = 0, vq = 0;
+        for (let j = 0; j < m; j++) vi = (vi << 1) | bits[off + j];
+        for (let j = 0; j < m; j++) vq = (vq << 1) | bits[off + m + j];
+        out[0] = AXIS_LUT[m][vi] * nrm;
+        out[1] = AXIS_LUT[m][vq] * nrm;
+      }
+
+      // 软解调: 输出每个 bit 的 LLR (正 => 更可能是 0), nv = 均衡后噪声功率
+      const llrTmp = new Float64Array(8);
+      function demapCarrier(zr, zi, nv, bpc, out, off) {
+        if (bpc === 1) { out[off] = 4 * zr / nv; return; }  // BPSK: LLR = 2*2*zr/nv (每维噪声 nv/2)
+        const m = bpc >> 1, nrm = QAM_NORM[bpc], ax = AXIS[m];
+        const axisLLR = (z, base) => {
+          for (let j = 0; j < m; j++) {
+            let d0 = 1e30, d1 = 1e30;
+            for (let idx = 0; idx < ax.M; idx++) {
+              const lv = ax.levels[idx] * nrm, d = (z - lv) * (z - lv);
+              const bit = (ax.bitsOf[idx] >> (m - 1 - j)) & 1;
+              if (bit) { if (d < d1) d1 = d; } else { if (d < d0) d0 = d; }
+            }
+            out[off + base + j] = (d1 - d0) / nv;
+          }
+        };
+        axisLLR(zr, 0);
+        axisLLR(zi, m);
+      }
+
+      // 硬判决最近星座点误差 (用于估计数据 EVM)
+      function nearestErr(zr, zi, bpc) {
+        if (bpc === 1) { const e = zr >= 0 ? zr - 1 : zr + 1; return e * e + zi * zi; }
+        const m = bpc >> 1, nrm = QAM_NORM[bpc], ax = AXIS[m];
+        const nearest = (z) => {
+          let best = 1e30;
+          for (let idx = 0; idx < ax.M; idx++) { const d = z - ax.levels[idx] * nrm; if (d * d < best) best = d * d; }
+          return best;
+        };
+        return nearest(zr) + nearest(zi);
+      }
+
+      // ---------------------------------------------------------------- 卷积码 K=7 (133,171)
+      const G0 = 0x5B, G1 = 0x79;
+      const par = (x) => { x ^= x >> 4; x ^= x >> 2; x ^= x >> 1; return x & 1; };
+      const PUNCT_34 = [1, 1, 1, 0, 0, 1];
+
+      function convEncode(bits) {
+        const out = new Uint8Array(bits.length * 2);
+        let state = 0;
+        for (let i = 0; i < bits.length; i++) {
+          const reg = (bits[i] << 6) | state;
+          out[2 * i] = par(reg & G0); out[2 * i + 1] = par(reg & G1);
+          state = reg >> 1;
+        }
+        return out;
+      }
+      function puncture(coded, rate) {
+        if (rate === '1/2') return coded;
+        const out = [];
+        for (let c = 0; c < coded.length; c++) if (PUNCT_34[c % 6]) out.push(coded[c]);
+        return Uint8Array.from(out);
+      }
+      function codedLen(nInfo, rate) {
+        if (rate === '1/2') return nInfo * 2;
+        let n = 0;
+        for (let c = 0; c < nInfo * 2; c++) if (PUNCT_34[c % 6]) n++;
+        return n;
+      }
+      function depuncture(llr, nInfo, rate) {
+        const out = new Float32Array(nInfo * 2);
+        if (rate === '1/2') { for (let i = 0; i < out.length; i++) out[i] = llr[i]; return out; }
+        let p = 0;
+        for (let c = 0; c < out.length; c++) if (PUNCT_34[c % 6]) out[c] = llr[p++];
+        return out;
+      }
+
+      const VIT = { p0: new Uint8Array(64), p1: new Uint8Array(64), o0: new Uint8Array(64), o1: new Uint8Array(64) };
+      for (let ns = 0; ns < 64; ns++) {
+        const u = ns >> 5;
+        for (let b = 0; b < 2; b++) {
+          const prev = ((ns & 31) << 1) | b, reg = (u << 6) | prev;
+          const o = par(reg & G0) * 2 + par(reg & G1);
+          if (b === 0) { VIT.p0[ns] = prev; VIT.o0[ns] = o; } else { VIT.p1[ns] = prev; VIT.o1[ns] = o; }
+        }
+      }
+      function viterbi(llr, n) {
+        let pm = new Float32Array(64).fill(-1e9), nm = new Float32Array(64);
+        pm[0] = 0;
+        const dec = new Uint8Array(n * 64), bm = new Float32Array(4);
+        for (let t = 0; t < n; t++) {
+          const l0 = llr[2 * t], l1 = llr[2 * t + 1];
+          bm[0] = l0 + l1; bm[1] = l0 - l1; bm[2] = -l0 + l1; bm[3] = -l0 - l1;
+          const base = t * 64;
+          for (let ns = 0; ns < 64; ns++) {
+            const m0 = pm[VIT.p0[ns]] + bm[VIT.o0[ns]], m1 = pm[VIT.p1[ns]] + bm[VIT.o1[ns]];
+            if (m1 > m0) { nm[ns] = m1; dec[base + ns] = 1; } else { nm[ns] = m0; }
+          }
+          const tmp = pm; pm = nm; nm = tmp;
+          if ((t & 63) === 63) { let mx = -1e30; for (let s = 0; s < 64; s++) if (pm[s] > mx) mx = pm[s]; for (let s = 0; s < 64; s++) pm[s] -= mx; }
+        }
+        const bits = new Uint8Array(n);
+        let state = 0;
+        for (let t = n - 1; t >= 0; t--) {
+          bits[t] = state >> 5;
+          state = ((state & 31) << 1) | dec[t * 64 + state];
+        }
+        return bits;
+      }
+
+      // ---------------------------------------------------------------- 交织 / 扰码
+      const permCache = new Map();
+      function getPerm(L, seed) {
+        const key = L + ':' + seed;
+        let p = permCache.get(key);
+        if (p) return p;
+        p = new Uint32Array(L);
+        for (let i = 0; i < L; i++) p[i] = i;
+        const rnd = xorshift32(seed);
+        for (let i = L - 1; i > 0; i--) { const j = rnd() % (i + 1); const t = p[i]; p[i] = p[j]; p[j] = t; }
+        if (permCache.size > 24) permCache.clear();
+        permCache.set(key, p);
+        return p;
+      }
+      function scrambleBits(bits, seed) {
+        const rnd = xorshift32(seed);
+        let word = 0, left = 0;
+        for (let i = 0; i < bits.length; i++) {
+          if (left === 0) { word = rnd(); left = 32; }
+          bits[i] ^= (word >>> (32 - left)) & 1; left--;
+        }
+      }
+
+      // ---------------------------------------------------------------- 帧长度计算
+      function bitsPerSymbol(modeId, bw) { return layout(bw).data.length * MODES[modeId].bpc; }
+      function payloadSymbols(len, modeId, bw) {
+        const m = MODES[modeId];
+        const nInfo = (len + 4) * 8 + 6;
+        return Math.ceil(codedLen(nInfo, m.rate) / bitsPerSymbol(modeId, bw));
+      }
+      function frameSamples(len, modeId, bw) { return S1_LEN + (2 + HDR_SYMS + payloadSymbols(len, modeId, bw)) * SYM + TAIL; }
+      function infoRateBps(modeId, bw, fs) {
+        const m = MODES[modeId], R = m.rate === '1/2' ? 0.5 : 0.75;
+        return layout(bw).data.length * m.bpc * R / (SYM / (fs || 48000));
+      }
+
+      // ---------------------------------------------------------------- 发送: 构造帧
+      const HDR_SCR = 0xA5C3E1F7, DAT_SCR = 0x7F4A7C15, HDR_PERM = 0x1111, DAT_PERM = 0x2222;
+
+      function addSymbol(out, pos, spec /* Map-like: arrays ks, vr, vi */, scale, cpLen) {
+        cpLen = cpLen || CP;
+        const re = new Float64Array(N), im = new Float64Array(N);
+        for (let i = 0; i < spec.ks.length; i++) {
+          const k = spec.ks[i];
+          re[k] = spec.vr[i]; im[k] = spec.vi[i];
+          re[N - k] = spec.vr[i]; im[N - k] = -spec.vi[i];
+        }
+        fft(re, im, true);
+        for (let n = 0; n < cpLen; n++) out[pos + n] = re[N - cpLen + n] * scale;
+        for (let n = 0; n < N; n++) out[pos + cpLen + n] = re[n] * scale;
+      }
+
+      let S1_TEMPLATE = null;
+      function getS1Template() {
+        if (S1_TEMPLATE) return S1_TEMPLATE;
+        const ks = [], vr = [], vi = [];
+        for (let k = K0; k <= FULL_LAST; k += 2) { ks.push(k); vr.push(S1_SIGN[k] * Math.SQRT2); vi.push(0); }
+        const tmp = new Float64Array(S1_LEN);
+        addSymbol(tmp, 0, { ks, vr, vi }, 1, S1_PRE);
+        S1_TEMPLATE = tmp.slice(S1_PRE);
+        return S1_TEMPLATE;
+      }
+
+      // payload: Uint8Array. 返回 Float32Array (未做电平缩放, 幅度约 rms≈k)
+      function buildFrame(payload, type, seq, modeId, bw) {
+        const mode = MODES[modeId];
+        const len = payload.length;
+        // ---- 帧头
+        const hb = [((modeId & 0x0f) << 4) | ((bw & 3) << 2), type & 0xff, seq & 0xff, (len >> 8) & 0xff, len & 0xff];
+        const hc = crc16(Uint8Array.from(hb));
+        hb.push((hc >> 8) & 0xff, hc & 0xff);
+        const hbits = [];
+        for (const b of hb) for (let i = 7; i >= 0; i--) hbits.push((b >> i) & 1);
+        const hinfo = Uint8Array.from(hbits.concat([0, 0, 0, 0, 0, 0]));
+        const hs = hinfo.slice(); scrambleBits(hs, HDR_SCR);
+        for (let i = hs.length - 6; i < hs.length; i++) hs[i] = 0;
+        const hcoded = convEncode(hs);
+        const hl = layout(HDR_BW);
+        const hCap = hl.data.length * HDR_SYMS;
+        const hpad = new Uint8Array(hCap);
+        hpad.set(hcoded);
+        { const r = xorshift32(0x9999); for (let i = hcoded.length; i < hCap; i++) hpad[i] = r() & 1; }
+        const hperm = getPerm(hCap, HDR_PERM), hinter = new Uint8Array(hCap);
+        for (let i = 0; i < hCap; i++) hinter[hperm[i]] = hpad[i];
+
+        // ---- 载荷
+        const crc = crc32(payload);
+        const body = new Uint8Array(len + 4);
+        body.set(payload); body[len] = (crc >>> 24) & 255; body[len + 1] = (crc >>> 16) & 255; body[len + 2] = (crc >>> 8) & 255; body[len + 3] = crc & 255;
+        const nInfo = body.length * 8 + 6;
+        const info = new Uint8Array(nInfo);
+        for (let i = 0; i < body.length; i++) for (let b = 0; b < 8; b++) info[i * 8 + b] = (body[i] >> (7 - b)) & 1;
+        scrambleBits(info, DAT_SCR);
+        for (let i = nInfo - 6; i < nInfo; i++) info[i] = 0;
+        const coded = puncture(convEncode(info), mode.rate);
+        const dl = layout(bw), bpsym = dl.data.length * mode.bpc;
+        const nSym = Math.ceil(coded.length / bpsym), cap = nSym * bpsym;
+        const padded = new Uint8Array(cap);
+        padded.set(coded);
+        { const r = xorshift32(0x7777); for (let i = coded.length; i < cap; i++) padded[i] = r() & 1; }
+        const perm = getPerm(cap, DAT_PERM), inter = new Uint8Array(cap);
+        for (let i = 0; i < cap; i++) inter[perm[i]] = padded[i];
+
+        // ---- 合成时域
+        const total = S1_LEN + (2 + HDR_SYMS + nSym) * SYM + TAIL;
+        const out = new Float64Array(total);
+        let pos = 0;
+        // S1
+        { const ks = [], vr = [], vi = [];
+          for (let k = K0; k <= FULL_LAST; k += 2) { ks.push(k); vr.push(S1_SIGN[k] * Math.SQRT2); vi.push(0); }
+          addSymbol(out, pos, { ks, vr, vi }, 1, S1_PRE); pos += S1_LEN; }
+        // T1, T2
+        { const ks = [], vr = [], vi = [];
+          for (let k = K0; k <= FULL_LAST; k++) { ks.push(k); vr.push(TRAIN_SIGN[k]); vi.push(0); }
+          addSymbol(out, pos, { ks, vr, vi }, 1); pos += SYM;
+          addSymbol(out, pos, { ks, vr, vi }, 1); pos += SYM; }
+        // 帧头 + 数据 (符号计数 t 用于导频 PN)
+        const tmpMap = [0, 0];
+        let t = 0;
+        for (let s = 0; s < HDR_SYMS; s++, t++) {
+          const ks = [], vr = [], vi = [];
+          hl.pilots.forEach((k, i) => { ks.push(k); vr.push(pilotSign(t, i)); vi.push(0); });
+          hl.data.forEach((k, j) => { ks.push(k); vr.push(1 - 2 * hinter[s * hl.data.length + j]); vi.push(0); });
+          addSymbol(out, pos, { ks, vr, vi }, 1); pos += SYM;
+        }
+        for (let s = 0; s < nSym; s++, t++) {
+          const ks = [], vr = [], vi = [];
+          dl.pilots.forEach((k, i) => { ks.push(k); vr.push(pilotSign(t, i)); vi.push(0); });
+          dl.data.forEach((k, j) => {
+            mapCarrier(inter, s * bpsym + j * mode.bpc, mode.bpc, tmpMap);
+            ks.push(k); vr.push(tmpMap[0]); vi.push(tmpMap[1]);
+          });
+          addSymbol(out, pos, { ks, vr, vi }, 1); pos += SYM;
+        }
+        for (let i = 0; i < TAIL; i++) out[pos + i] = out[pos - N + i];   // 循环后缀
+        return out;
+      }
+
+      // 电平整形: 软削波降低 PAPR, 然后把峰值缩放到 amplitude
+      function finalizeFrame(frame, amplitude, clipRatio) {
+        clipRatio = clipRatio || 3.2;
+        let e = 0;
+        for (let i = 0; i < frame.length; i++) e += frame[i] * frame[i];
+        const rms = Math.sqrt(e / frame.length) || 1;
+        const lim = clipRatio * rms, g = amplitude / lim;
+        const out = new Float32Array(frame.length);
+        for (let i = 0; i < frame.length; i++) {
+          let v = frame[i];
+          if (v > lim) v = lim; else if (v < -lim) v = -lim;
+          out[i] = v * g;
+        }
+        // 起止加 3ms 升降余弦, 避免喇叭/DAC 爆音
+        const r = 48;
+        for (let i = 0; i < r && i < out.length; i++) {
+          const w = 0.5 * (1 - Math.cos(Math.PI * i / r));
+          out[i] *= w; out[out.length - 1 - i] *= w;
+        }
+        return out;
+      }
+
+      // ---------------------------------------------------------------- 接收
+      class Receiver {
+        constructor(fs, onPacket, onEvent) {
+          this.fs = fs;
+          this.onPacket = onPacket || (() => {});
+          this.onEvent = onEvent || (() => {});
+          this.buf = new Float32Array(1 << 19);
+          this.len = 0;           // buf 中有效样点数
+          this.base = 0;          // buf[0] 对应的绝对样点序号
+          this.scanD = 0;         // 下一个待检测的绝对位置
+          this.psum = 0; this.rsum = 0; this.qsum = 0; this.init = false; this.armed = true; this.steps = 0;
+          this.state = 0;         // 0 扫描, 1 等待细同步样点, 2 等待帧头, 3 等待数据
+          this.d0 = 0; this.s = 0; this.ctx = null;
+          this.rmsMin = 0.0025;
+          this.TH = 0.5;
+          this.lastSnr = null; this.lastCarrierSnr = null;
+          this.peak = 0;
+          this.dcX = 0; this.dcY = 0;
+          this.tmpl = getS1Template();
+          let e = 0; for (let i = 0; i < N; i++) e += this.tmpl[i] * this.tmpl[i];
+          this.tmplE = e;
+        }
+
+        get end() { return this.base + this.len; }
+        at(i) { return this.buf[i - this.base]; }
+
+        push(chunk) {
+          // 追加
+          if (this.len + chunk.length > this.buf.length) {
+            // 先丢弃已不需要的旧数据
+            const kf = this.state === 0 ? this.scanD : (this.state === 1 ? this.d0 - 16 : this.s - 8);
+            const keepFrom = Math.max(this.base, kf - 8);
+            const drop = keepFrom - this.base;
+            if (drop > 0) { this.buf.copyWithin(0, drop, this.len); this.len -= drop; this.base += drop; }
+            if (this.len + chunk.length > this.buf.length) {
+              const nb = new Float32Array(Math.max(this.buf.length * 2, this.len + chunk.length));
+              nb.set(this.buf.subarray(0, this.len)); this.buf = nb;
+            }
+          }
+          let pk = 0;
+          for (let i = 0; i < chunk.length; i++) { const a = Math.abs(chunk[i]); if (a > pk) pk = a; }
+          this.peak = pk;
+          // 一阶隔直滤波 (约 38 Hz), 去除麦克风通路直流偏移
+          let px = this.dcX, py = this.dcY;
+          const o = this.len, buf = this.buf;
+          for (let i = 0; i < chunk.length; i++) {
+            const x = chunk[i], y = x - px + 0.995 * py;
+            px = x; py = y; buf[o + i] = y;
+          }
+          this.dcX = px; this.dcY = py;
+          this.len += chunk.length;
+          this.run();
+        }
+
+        run() {
+          for (let guard = 0; guard < 1000000; guard++) {
+            let progressed = false;
+            if (this.state === 0) progressed = this.scan();
+            else if (this.state === 1) progressed = this.trySync();
+            else if (this.state === 2) progressed = this.tryHeader();
+            else if (this.state === 3) progressed = this.tryData();
+            if (!progressed) break;
+          }
+        }
+
+        // ---- 状态 0: Schmidl-Cox 延迟相关检测 (半符号周期重复)
+        scan() {
+          const L = N >> 1, end = this.end;
+          if (this.scanD < this.base) this.scanD = this.base;
+          if (!this.init) {
+            if (this.scanD + 2 * L > end) return false;
+            let p = 0, r = 0, q = 0;
+            for (let m = 0; m < L; m++) { const a = this.at(this.scanD + m), b = this.at(this.scanD + m + L); p += a * b; r += b * b; q += a * a; }
+            this.psum = p; this.rsum = r; this.qsum = q; this.init = true; this.steps = 0;
+          }
+          while (this.scanD + 2 * L < end) {
+            const d = this.scanD;
+            const R = this.rsum, P = this.psum, Q = this.qsum;
+            const rmsOk = (R / L) > this.rmsMin * this.rmsMin && (Q / L) > this.rmsMin * this.rmsMin;
+            const M = (rmsOk && P > 0) ? (P * P) / (R * Q) : 0;
+            if (!this.armed) { if (M < 0.3) this.armed = true; }
+            else if (M > this.TH) {
+              this.d0 = d; this.state = 1; return true;
+            }
+            const a0 = this.at(d), a1 = this.at(d + L), a2 = this.at(d + 2 * L);
+            this.psum += a1 * a2 - a0 * a1;
+            this.rsum += a2 * a2 - a1 * a1;
+            this.qsum += a1 * a1 - a0 * a0;
+            this.scanD++;
+            if (++this.steps >= 4096) { this.init = false; this.steps = 0; return true; }
+          }
+          return false;
+        }
+
+        // ---- 状态 1: 用已知 S1 波形做互相关精确定时
+        trySync() {
+          const lo = this.d0 + 40, hi = this.d0 + 224;
+          if (this.end < hi + N + 4) return false;
+          let best = -1, bestS = -1;
+          const t = this.tmpl;
+          for (let s = lo; s < hi; s++) {
+            let c = 0, e = 0;
+            const off = s - this.base;
+            for (let n = 0; n < N; n++) { const x = this.buf[off + n]; c += x * t[n]; e += x * x; }
+            const sc = (e > 1e-12) ? c / Math.sqrt(e * this.tmplE) : 0;
+            if (sc > best) { best = sc; bestS = s; }
+          }
+          if (best < 0.4) {
+            this.armed = false; this.scanD = this.d0 + 96; this.init = false; this.state = 0;
+            return true;
+          }
+          this.s = bestS; this.syncScore = best;
+          this.ctx = null;
+          this.state = 2;
+          return true;
+        }
+
+        symWin(j) { return this.s + N + j * SYM + CP - BACK; }   // 训练/帧头/数据符号 j (T1 = 0)
+
+        fftAt(w, re, im) {
+          const off = w - this.base;
+          for (let n = 0; n < N; n++) { re[n] = this.buf[off + n]; im[n] = 0; }
+          fft(re, im, false);
+        }
+
+        // ---- 状态 2: 信道估计 + 帧头
+        tryHeader() {
+          if (this.end < this.symWin(1 + HDR_SYMS) + N + 2) return false;
+          const re = new Float64Array(N), im = new Float64Array(N);
+          const y1r = new Float64Array(N), y1i = new Float64Array(N), y2r = new Float64Array(N), y2i = new Float64Array(N);
+          this.fftAt(this.symWin(0), y1r, y1i); this.fftAt(this.symWin(1), y2r, y2i);
+          const Hr = new Float64Array(N), Hi = new Float64Array(N), nv = new Float64Array(N);
+          let sigP = 0, noiP = 0, cnt = 0;
+          const raw = new Float64Array(N);
+          for (let k = K0; k <= FULL_LAST; k++) {
+            const sgn = TRAIN_SIGN[k];
+            Hr[k] = 0.5 * (y1r[k] + y2r[k]) * sgn; Hi[k] = 0.5 * (y1i[k] + y2i[k]) * sgn;
+            const dr = y1r[k] - y2r[k], di = y1i[k] - y2i[k];
+            raw[k] = 0.5 * (dr * dr + di * di);
+          }
+          // 噪声方差: 邻域平滑 (±4 载波)
+          for (let k = K0; k <= FULL_LAST; k++) {
+            let s = 0, c = 0;
+            for (let q = -4; q <= 4; q++) { const kk = k + q; if (kk >= K0 && kk <= FULL_LAST) { s += raw[kk]; c++; } }
+            const h2 = Hr[k] * Hr[k] + Hi[k] * Hi[k];
+            nv[k] = Math.max(s / c, h2 * 4e-4, 1e-12);   // 失真地板约 -34 dB
+            sigP += h2; noiP += s / c; cnt++;
+          }
+          const snrTrain = 10 * Math.log10(Math.max(1e-9, sigP / Math.max(1e-12, noiP)));
+          this.lastSnr = snrTrain;
+          const carSnr = new Float32Array(FULL_LAST + 1);
+          for (let k = K0; k <= FULL_LAST; k++) {
+            let s = 0, c = 0;
+            for (let q = -2; q <= 2; q++) { const kk = k + q; if (kk >= K0 && kk <= FULL_LAST) { s += raw[kk]; c++; } }
+            const h2 = Hr[k] * Hr[k] + Hi[k] * Hi[k];
+            carSnr[k] = 10 * Math.log10(Math.max(1e-9, h2 / Math.max(1e-12, s / c)));
+          }
+          this.lastCarrierSnr = carSnr;
+
+          const ctx = { Hr, Hi, nv, a: 0, b: 0, c: 1, t: 0, snrTrain };
+          this.ctx = ctx;
+
+          // ---- 帧头 3 个符号
+          const hl = layout(HDR_BW), hCap = hl.data.length * HDR_SYMS;
+          const hllrInter = new Float32Array(hCap);
+          for (let h = 0; h < HDR_SYMS; h++) {
+            this.fftAt(this.symWin(2 + h), re, im);
+            this.eqSymbol(ctx, re, im, hl, 1, hllrInter, h * hl.data.length, null);
+            ctx.t++;
+          }
+          const hperm = getPerm(hCap, HDR_PERM), hllr = new Float32Array(hCap);
+          for (let i = 0; i < hCap; i++) hllr[i] = hllrInter[hperm[i]];
+          const nInfoH = 62;
+          const dec = viterbi(hllr.subarray(0, nInfoH * 2), nInfoH);
+          const hs = dec.slice(); scrambleBits(hs, HDR_SCR);
+          for (let i = hs.length - 6; i < hs.length; i++) hs[i] = 0;
+          const bytes = new Uint8Array(7);
+          for (let i = 0; i < 56; i++) bytes[i >> 3] = (bytes[i >> 3] << 1) | hs[i];
+          const hc = crc16(bytes.subarray(0, 5));
+          const okH = (((hc >> 8) & 255) === bytes[5]) && ((hc & 255) === bytes[6]);
+          const modeId = bytes[0] >> 4, bw = (bytes[0] >> 2) & 3, type = bytes[1], seq = bytes[2], plen = (bytes[3] << 8) | bytes[4];
+          if (!okH || modeId >= MODES.length || plen > 8192 || (bytes[0] & 3) !== 0) {
+            this.onEvent({ kind: 'hdr_fail', snr: snrTrain });
+            this.state = 0; this.armed = false; this.scanD = this.s + N; this.init = false;
+            return true;
+          }
+          ctx.hdr = { modeId, bw, type, seq, len: plen };
+          ctx.nSym = payloadSymbols(plen, modeId, bw);
+          this.onEvent({ kind: 'hdr_ok', snr: snrTrain, hdr: ctx.hdr });
+          this.state = 3;
+          return true;
+        }
+
+        // 对一个符号做 导频相位跟踪 + 均衡 + (可选)软解调
+        //   lay: 载波布局; bpc: 每载波比特; llrOut: 输出缓冲; off: 起始位置; evmAcc: {e, n}
+        eqSymbol(ctx, yr, yi, lay, bpc, llrOut, off, evmAcc) {
+          const { Hr, Hi, nv } = ctx;
+          const pil = lay.pilots, np = pil.length;
+          // 1) 导频残差相位
+          let sw = 0, swk = 0, swkk = 0, swp = 0, swpk = 0, ampSum = 0;
+          const phs = new Float64Array(np), ws = new Float64Array(np);
+          for (let i = 0; i < np; i++) {
+            const k = pil[i], sg = pilotSign(ctx.t, i);
+            const rr = (yr[k] * Hr[k] + yi[k] * Hi[k]) * sg, ri = (yi[k] * Hr[k] - yr[k] * Hi[k]) * sg;
+            const pred = ctx.a + ctx.b * (k - KC);
+            let ph = Math.atan2(ri, rr) - pred;
+            ph -= 2 * Math.PI * Math.round(ph / (2 * Math.PI));
+            const w = Math.sqrt(rr * rr + ri * ri);
+            phs[i] = ph; ws[i] = w;
+            const x = k - KC;
+            sw += w; swk += w * x; swkk += w * x * x; swp += w * ph; swpk += w * ph * x;
+            const h2 = Hr[k] * Hr[k] + Hi[k] * Hi[k];
+            ampSum += Math.sqrt(yr[k] * yr[k] + yi[k] * yi[k]) / Math.sqrt(Math.max(1e-18, h2));
+          }
+          const det = sw * swkk - swk * swk;
+          let da = 0, db = 0;
+          if (det > 1e-18) { da = (swp * swkk - swpk * swk) / det; db = (sw * swpk - swk * swp) / det; }
+          ctx.a += 0.9 * da; ctx.b += 0.6 * db;
+          const cm = ampSum / np;
+          ctx.c += 0.3 * (Math.min(2, Math.max(0.5, cm)) - ctx.c);
+
+          // 2) 均衡 + 解调
+          if (!llrOut) return;
+          const data = lay.data;
+          for (let j = 0; j < data.length; j++) {
+            const k = data[j];
+            const h2 = Hr[k] * Hr[k] + Hi[k] * Hi[k];
+            const ph = ctx.a + ctx.b * (k - KC);
+            const cr = Math.cos(ph), ci = -Math.sin(ph);
+            // z = y / H * e^{-j ph} / c
+            const zr0 = (yr[k] * Hr[k] + yi[k] * Hi[k]) / h2, zi0 = (yi[k] * Hr[k] - yr[k] * Hi[k]) / h2;
+            const zr = (zr0 * cr - zi0 * ci) / ctx.c, zi = (zr0 * ci + zi0 * cr) / ctx.c;
+            const nvEq = (nv[k] / h2) / (ctx.c * ctx.c) + 1e-9;
+            demapCarrier(zr, zi, nvEq, bpc, llrOut, off + j * bpc);
+            if (evmAcc) { evmAcc.e += nearestErr(zr, zi, bpc); evmAcc.n++; }
+          }
+        }
+
+        // ---- 状态 3: 数据
+        tryData() {
+          const ctx = this.ctx, h = ctx.hdr;
+          const lastWin = this.symWin(2 + HDR_SYMS + ctx.nSym - 1);
+          if (this.end < lastWin + N + 2) return false;
+          const mode = MODES[h.modeId], dl = layout(h.bw), bpc = mode.bpc, bpsym = dl.data.length * bpc;
+          const cap = ctx.nSym * bpsym, llrInter = new Float32Array(cap);
+          const re = new Float64Array(N), im = new Float64Array(N), evm = { e: 0, n: 0 };
+          for (let s = 0; s < ctx.nSym; s++) {
+            this.fftAt(this.symWin(2 + HDR_SYMS + s), re, im);
+            this.eqSymbol(ctx, re, im, dl, bpc, llrInter, s * bpsym, evm);
+            ctx.t++;
+          }
+          const perm = getPerm(cap, DAT_PERM), llr = new Float32Array(cap);
+          for (let i = 0; i < cap; i++) llr[i] = llrInter[perm[i]];
+          const nInfo = (h.len + 4) * 8 + 6, cl = codedLen(nInfo, mode.rate);
+          const full = depuncture(llr.subarray(0, cl), nInfo, mode.rate);
+          const dec = viterbi(full, nInfo);
+          // 信道误码数: 把译码结果重新编码, 与接收硬判决比较 (仅 CRC 通过时有意义)
+          const reEnc = puncture(convEncode(dec), mode.rate);
+          let chanErr = 0;
+          for (let i = 0; i < cl; i++) if ((llr[i] < 0 ? 1 : 0) !== reEnc[i]) chanErr++;
+          scrambleBits(dec, DAT_SCR);
+          const body = new Uint8Array(h.len + 4);
+          for (let i = 0; i < body.length * 8; i++) body[i >> 3] = (body[i >> 3] << 1) | dec[i];
+          const payload = body.subarray(0, h.len);
+          const rx = ((body[h.len] << 24) | (body[h.len + 1] << 16) | (body[h.len + 2] << 8) | body[h.len + 3]) >>> 0;
+          const ok = rx === crc32(payload);
+          const evmDb = evm.n ? -10 * Math.log10(Math.max(1e-9, evm.e / evm.n)) : null;
+          this.onPacket({
+            ok, seq: h.seq, type: h.type, payload: ok ? payload.slice() : null, len: h.len,
+            modeId: h.modeId, bw: h.bw, snrTrain: ctx.snrTrain, chanErr: ok ? chanErr : null, snrEvm: evmDb, nSym: ctx.nSym,
+            carrierSnr: this.lastCarrierSnr, bitrate: infoRateBps(h.modeId, h.bw, this.fs)
+          });
+          this.state = 0; this.armed = true;
+          this.scanD = this.symWin(2 + HDR_SYMS + ctx.nSym) - CP + BACK - 8; this.init = false;
+          this.ctx = null;
+          return true;
+        }
+      }
+
+      return {
+        N, CP, SYM, K0, BW_LAST, MODES, HDR_SYMS,
+        crc16, crc32, buildFrame, finalizeFrame, frameSamples, infoRateBps, payloadSymbols, Receiver, layout,
+        _internal: { fft, viterbi, convEncode, puncture, depuncture, codedLen }
+      };
+    })();
+
+
+    // ========================================================================
+    // 发送端应用逻辑 (OFDM 调制内核见上方 Modem)
+    // ========================================================================
+    const TARGET_FS = 48000;
+    const GAP_SAMPLES = 480;          // 帧间静音 10 ms
+    const PROBE_LEN = 200;
+    let audioCtx = null;
+    let currentSourceNode = null;
+    let packetSeq = 1;
+    let txPacketsCount = 0;
+    let txBytesCount = 0;
+    let isCancelled = false;
+    let transmitting = false;
+    let txToken = 0;
+    let progressRaf = null;
+    let selectedFile = null;
+
+    const PacketType = { TEXT: 0, FILE_START: 1, FILE_DATA: 2, FILE_END: 3 };
+
+    function getAudioContext() {
+      if (!audioCtx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        try { audioCtx = new AudioCtx({ sampleRate: TARGET_FS, latencyHint: 'playback' }); }
+        catch (e) { audioCtx = new AudioCtx(); }
+        const badge = document.getElementById('srBadge');
+        badge.textContent = 'Fs: ' + audioCtx.sampleRate + ' Hz';
+        if (audioCtx.sampleRate !== TARGET_FS) {
+          badge.textContent += ' ⚠ 需与接收端一致';
+          badge.style.color = '#f59e0b';
+        }
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    }
+
+    // ---- UI 元素
+    const modeEl = document.getElementById('modeSelect');
+    const bwEl = document.getElementById('bwSelect');
+    const passEl = document.getElementById('passSelect');
+    const volEl = document.getElementById('volumeSlider');
+    const charCountEl = document.getElementById('charCount');
+    const msgInput = document.getElementById('messageInput');
+    const chunkEl = document.getElementById('chunkSizeSelect');
+
+    function getTx() {
+      return {
+        modeId: parseInt(modeEl.value, 10),
+        bw: parseInt(bwEl.value, 10),
+        passes: parseInt(passEl.value, 10) || 1,
+        amp: parseFloat(volEl.value) / 100
+      };
+    }
+
+    volEl.addEventListener('input', () => {
+      const db = (20 * Math.log10(parseFloat(volEl.value) / 100)).toFixed(1);
+      document.getElementById('volumeVal').textContent = volEl.value + '% (' + db + ' dB)';
+    });
+
+    modeEl.addEventListener('change', () => {
+      // 低速档单帧时间长, 默认用更小的分卷
+      chunkEl.value = parseInt(modeEl.value, 10) === 0 ? '512' : '1024';
+      updateFileInfo();
+    });
+    bwEl.addEventListener('change', updateFileInfo);
+    passEl.addEventListener('change', updateFileInfo);
+    chunkEl.addEventListener('change', updateFileInfo);
+
+    msgInput.addEventListener('input', () => { charCountEl.textContent = msgInput.value.length + ' 字符'; });
+    function setMessage(text) { msgInput.value = text; charCountEl.textContent = text.length + ' 字符'; }
+
+    function switchTab(tab) {
+      document.getElementById('tabText').classList.toggle('active', tab === 'text');
+      document.getElementById('tabFile').classList.toggle('active', tab === 'file');
+      document.getElementById('panelText').style.display = tab === 'text' ? 'block' : 'none';
+      document.getElementById('panelFile').style.display = tab === 'file' ? 'block' : 'none';
+    }
+
+    // ---- 示波器
+    const canvas = document.getElementById('scopeCanvas');
+    const ctx = canvas.getContext('2d');
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth * window.devicePixelRatio;
+      canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function drawWaveform(samples) {
+      ctx.fillStyle = '#070a12';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#1a2234';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+      if (!samples || samples.length === 0) return;
+      ctx.strokeStyle = '#06b6d4';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let x = 0; x < canvas.width; x++) {
+        const idx = Math.floor((x / canvas.width) * samples.length);
+        const y = (0.5 - (samples[idx] || 0) * 0.45) * canvas.height;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    drawWaveform(null);
+
+    // ---- 2 kHz 校准音 (用于对线/看接收端电平表)
+    let testOsc = null;
+    document.getElementById('btnTone1200').addEventListener('click', () => {
+      const ac = getAudioContext();
+      if (testOsc) {
+        testOsc.stop(); testOsc.disconnect(); testOsc = null;
+        document.getElementById('btnTone1200').textContent = '2kHz 校准音';
+        document.getElementById('txStatus').textContent = '待机空闲';
+        return;
+      }
+      testOsc = ac.createOscillator();
+      const gain = ac.createGain();
+      testOsc.frequency.value = 2000;
+      gain.gain.value = parseFloat(volEl.value) / 100 * 0.5;
+      testOsc.connect(gain); gain.connect(ac.destination);
+      testOsc.start();
+      document.getElementById('btnTone1200').textContent = '⏹ 停止校准音';
+      document.getElementById('txStatus').textContent = '正在输出 2kHz 校准正弦波...';
+    });
+
+    // ---- 把一组数据包合成为一整段连续音频
+    function generateWakeupTone(fs, amp) {
+      const n = Math.round(fs * 0.12), out = new Float32Array(n + Math.round(fs * 0.04));
+      const ramp = Math.round(fs * 0.02);
+      for (let i = 0; i < n; i++) {
+        let env = 1;
+        if (i < ramp) env = 0.5 * (1 - Math.cos(Math.PI * i / ramp));
+        else if (i > n - ramp) env = 0.5 * (1 + Math.cos(Math.PI * (i - (n - ramp)) / ramp));
+        out[i] = amp * 0.5 * env * Math.sin(2 * Math.PI * 2000 * i / fs);
+      }
+      return out;
+    }
+
+    function renderPackets(packets, tx, fs) {
+      // 1) 逐包合成
+      const wake = generateWakeupTone(fs, tx.amp);
+      const frames = [], marks = [];
+      let total = wake.length;
+      for (const pkt of packets) {
+        const m = pkt.modeId != null ? pkt.modeId : tx.modeId;
+        const raw = Modem.buildFrame(pkt.payload, pkt.type, packetSeq & 0xff, m, tx.bw);
+        packetSeq++;
+        const f = Modem.finalizeFrame(raw, tx.amp, 3.2);
+        frames.push(f);
+        marks.push({ start: total, end: total + f.length, desc: pkt.desc, bytes: pkt.payload.length });
+        total += f.length + GAP_SAMPLES;
+      }
+      // 2) 拼成一段
+      const out = new Float32Array(total + Math.round(fs * 0.1));
+      out.set(wake, 0);
+      frames.forEach((f, i) => out.set(f, marks[i].start));
+      return { samples: out, marks };
+    }
+
+    function playBuffer(samples, fs) {
+      const ac = getAudioContext();
+      const buf = ac.createBuffer(1, samples.length, fs);
+      buf.getChannelData(0).set(samples);
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      src.connect(ac.destination);
+      currentSourceNode = src;
+      return new Promise((resolve) => {
+        src.onended = () => resolve();
+        src.start();
+      });
+    }
+
+    // 统一发送入口: 合成 -> 播放 -> 刷新进度
+    async function transmit(packets, label, opts) {
+      if (transmitting) { alert('正在发送中，请先等待或点击「中止」'); return false; }
+      const ac = getAudioContext();
+      const fs = ac.sampleRate;
+      const tx = getTx();
+      const passes = (opts && opts.passes) || tx.passes;
+      let list = [];
+      for (let p = 0; p < passes; p++) {
+        for (const pk of packets) list.push(passes > 1 ? { ...pk, desc: pk.desc + (passes > 1 ? ' (第' + (p + 1) + '/' + passes + '轮)' : '') } : pk);
+      }
+      transmitting = true; isCancelled = false;
+      const myTok = ++txToken;
+      const statusEl = document.getElementById('txStatus');
+      statusEl.style.color = '#38bdf8';
+      statusEl.textContent = '正在合成 OFDM 音频...';
+      document.getElementById('btnStop').style.display = 'block';
+      const showProg = !!(opts && opts.showProgress);
+      if (showProg) document.getElementById('fileProgressCard').style.display = 'block';
+      await new Promise(r => setTimeout(r, 30));
+
+      const { samples, marks } = renderPackets(list, tx, fs);
+      const durSec = samples.length / fs;
+      document.getElementById('statFrameDuration').textContent = list.length + ' 帧 / ' + durSec.toFixed(1) + 's';
+
+      let t0 = null;
+      const tick = () => {
+        if (t0 === null || !transmitting) return;
+        const pos = Math.min(samples.length - 1, Math.max(0, Math.floor((ac.currentTime - t0) * fs)));
+        let mi = marks.findIndex(m => pos < m.end);
+        if (mi < 0) mi = marks.length - 1;
+        const pct = Math.round(100 * pos / samples.length);
+        if (showProg) {
+          document.getElementById('fileProgressDesc').textContent = '正在发送 ' + marks[mi].desc + '  [' + (mi + 1) + '/' + marks.length + ']';
+          document.getElementById('fileProgressPercent').textContent = pct + '%';
+          document.getElementById('fileProgressBar').style.width = pct + '%';
+        }
+        statusEl.textContent = label + ' ' + (mi + 1) + '/' + marks.length + ' · 剩余 ' + Math.max(0, Math.ceil(durSec - (ac.currentTime - t0))) + 's';
+        drawWaveform(samples.subarray(pos, Math.min(samples.length, pos + 1536)));
+        progressRaf = requestAnimationFrame(tick);
+      };
+
+      const playing = playBuffer(samples, fs);
+      t0 = ac.currentTime;
+      tick();
+      await playing;
+      if (myTok === txToken) transmitting = false;
+      if (progressRaf) cancelAnimationFrame(progressRaf);
+      progressRaf = null;
+      document.getElementById('btnStop').style.display = 'none';
+
+      // 统计已发出的帧
+      const elapsedSamples = Math.floor((ac.currentTime - t0) * fs);
+      let sent = 0, bytes = 0;
+      marks.forEach(m => { if (!isCancelled || elapsedSamples >= m.end) { sent++; bytes += m.bytes; } });
+      txPacketsCount += sent; txBytesCount += bytes;
+      document.getElementById('statTxPackets').textContent = txPacketsCount;
+      document.getElementById('statTxBytes').textContent = txBytesCount + ' 字节';
+      if (showProg) {
+        document.getElementById('fileProgressPercent').textContent = isCancelled ? '已中止' : '100%';
+        if (!isCancelled) document.getElementById('fileProgressBar').style.width = '100%';
+      }
+      if (!isCancelled) {
+        statusEl.textContent = '✓ ' + label + '完成 (' + durSec.toFixed(1) + ' 秒)';
+        statusEl.style.color = '#10b981';
+      }
+      drawWaveform(null);
+      return !isCancelled;
+    }
+
+    document.getElementById('btnStop').addEventListener('click', () => {
+      isCancelled = true;
+      transmitting = false;
+      if (currentSourceNode) { try { currentSourceNode.stop(); } catch (e) {} currentSourceNode = null; }
+      document.getElementById('txStatus').textContent = '已手动停止';
+      document.getElementById('txStatus').style.color = 'var(--text-dim)';
+      document.getElementById('btnStop').style.display = 'none';
+    });
+
+    // ---- 文本发送
+    document.getElementById('btnSend').addEventListener('click', async () => {
+      const text = msgInput.value.trim();
+      if (!text) { alert('请输入要发送的内容！'); return; }
+      const payload = new TextEncoder().encode(text);
+      if (payload.length > 4000) { alert('文本过长 (>4000 字节)，请使用文件传输。'); return; }
+      await transmit([{ type: PacketType.TEXT, payload, desc: '文本报文' }], '文本发送', { passes: 1 });
+    });
+
+    // ---- 信道探测: 依次发送 6 个档位各一帧, 接收端据此给出建议档位
+    function probePayload(modeId) {
+      const head = 'PROBE|' + modeId + '|';
+      const p = new Uint8Array(PROBE_LEN);
+      const pat = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      for (let i = 0; i < PROBE_LEN; i++) p[i] = i < head.length ? head.charCodeAt(i) : pat.charCodeAt((i * 7 + modeId * 3) % pat.length);
+      return p;
+    }
+    document.getElementById('btnProbe').addEventListener('click', async () => {
+      const pk = [];
+      for (let m = 0; m < Modem.MODES.length; m++) {
+        pk.push({ type: PacketType.TEXT, payload: probePayload(m), modeId: m, desc: '探测 ' + Modem.MODES[m].name });
+      }
+      await transmit(pk, '信道探测', { passes: 1 });
+    });
+
+    // ---- 文件
+    document.getElementById('filePicker').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        selectedFile = { name: file.name, data: new Uint8Array(reader.result), size: file.size, mime: file.type || 'application/octet-stream' };
+        updateFileInfo();
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    function loadSample(name) {
+      let content = '{"device":"3.5mm-AudioModem","status":"OK","modem":"OFDM"}';
+      let mime = 'application/json';
+      if (name === 'sensor.csv') { content = 'time,temp,hum\n100,25.4,60\n101,25.5,59'; mime = 'text/csv'; }
+      else if (name === 'note.txt') { content = 'AudioJack 3.5mm OFDM 通信协议测试文本文件。'; mime = 'text/plain'; }
+      const data = new TextEncoder().encode(content);
+      selectedFile = { name, data, size: data.length, mime };
+      updateFileInfo();
+    }
+
+    function updateFileInfo() {
+      if (!selectedFile) return;
+      document.getElementById('fileInfoText').textContent = selectedFile.name + ' (' + selectedFile.size + ' 字节)';
+      const tx = getTx();
+      const chunkSize = parseInt(chunkEl.value, 10);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const fs = (audioCtx && audioCtx.sampleRate) || TARGET_FS;
+      let samples = Modem.frameSamples(160, tx.modeId, tx.bw) + Modem.frameSamples(110, tx.modeId, tx.bw) + 2 * GAP_SAMPLES;
+      for (let c = 0; c < totalChunks; c++) {
+        const len = 4 + Math.min(chunkSize, selectedFile.size - c * chunkSize);
+        samples += Modem.frameSamples(len, tx.modeId, tx.bw) + GAP_SAMPLES;
+      }
+      const sec = (samples * tx.passes + fs * 0.16) / fs;
+      const kbps = (selectedFile.size * 8 / sec / 1000).toFixed(1);
+      document.getElementById('fileEstimate').textContent = totalChunks + ' 分卷 · 约 ' + Math.ceil(sec) + ' 秒 · 有效 ' + kbps + ' kbps';
+    }
+
+    function chunkPayload(c, chunkSize, totalChunks) {
+      const slice = selectedFile.data.subarray(c * chunkSize, Math.min(selectedFile.size, (c + 1) * chunkSize));
+      const p = new Uint8Array(4 + slice.length);
+      p[0] = (c >> 8) & 0xff; p[1] = c & 0xff; p[2] = (totalChunks >> 8) & 0xff; p[3] = totalChunks & 0xff;
+      p.set(slice, 4);
+      return p;
+    }
+    function endPacket() {
+      const meta = JSON.stringify({ name: selectedFile.name, size: selectedFile.size, crc: Modem.crc32(selectedFile.data) });
+      return { type: PacketType.FILE_END, payload: new TextEncoder().encode(meta), desc: '结束帧: ' + selectedFile.name };
+    }
+
+    document.getElementById('btnSendFile').addEventListener('click', async () => {
+      if (!selectedFile) { alert('请先选择或载入一个文件！'); return; }
+      const chunkSize = parseInt(chunkEl.value, 10);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      if (totalChunks > 65535) { alert('分卷数超过 65535，请增大分卷大小。'); return; }
+      const pk = [];
+      pk.push({
+        type: PacketType.FILE_START, desc: '启动帧: ' + selectedFile.name,
+        payload: new TextEncoder().encode(JSON.stringify({ name: selectedFile.name, size: selectedFile.size, chunks: totalChunks, mime: selectedFile.mime }))
+      });
+      for (let c = 0; c < totalChunks; c++) pk.push({ type: PacketType.FILE_DATA, payload: chunkPayload(c, chunkSize, totalChunks), desc: '分卷 [' + (c + 1) + '/' + totalChunks + ']' });
+      pk.push(endPacket());
+      const ok = await transmit(pk, '文件发送', { showProgress: true });
+      if (ok) document.getElementById('txStatus').textContent = '✓ 文件 ' + selectedFile.name + ' 全部分卷发送完成！';
+    });
+
+    // ---- 选择性重传
+    function parseChunkNumbersInput(input, maxChunks) {
+      const indices = new Set();
+      if (!input || !input.trim()) return [];
+      const parts = input.replace(/，/g, ',').replace(/；/g, ';').split(/[\s,;]+/);
+      for (const part of parts) {
+        const t = part.trim();
+        if (!t) continue;
+        if (t.includes('-') || t.includes('~')) {
+          const r = t.split(/[-~]/);
+          if (r.length === 2) {
+            const a = parseInt(r[0], 10), b = parseInt(r[1], 10);
+            if (!isNaN(a) && !isNaN(b)) for (let n = Math.min(a, b); n <= Math.max(a, b); n++) if (n >= 1 && n <= maxChunks) indices.add(n - 1);
+          }
+        } else {
+          const n = parseInt(t, 10);
+          if (!isNaN(n) && n >= 1 && n <= maxChunks) indices.add(n - 1);
+        }
+      }
+      return Array.from(indices).sort((a, b) => a - b);
+    }
+
+    document.getElementById('btnRetransmit').addEventListener('click', async () => {
+      if (!selectedFile) { alert('请先选择文件！'); return; }
+      const chunkSize = parseInt(chunkEl.value, 10);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const idx = parseChunkNumbersInput(document.getElementById('retransmitInput').value, totalChunks);
+      if (idx.length === 0) { alert('未检测到有效分卷序号，请输入 1 ~ ' + totalChunks + ' 之间的分卷序号 (如: 154 或 5, 12, 154)'); return; }
+      const pk = idx.map(c => ({ type: PacketType.FILE_DATA, payload: chunkPayload(c, chunkSize, totalChunks), desc: '重传分卷 [' + (c + 1) + '/' + totalChunks + ']' }));
+      pk.push(endPacket());
+      const ok = await transmit(pk, '重传', { showProgress: true });
+      if (ok) document.getElementById('txStatus').textContent = '✓ 已完成 ' + idx.length + ' 个分卷的重传！';
+    });
+
+    // ---- 断点续传
+    document.getElementById('btnResume').addEventListener('click', async () => {
+      if (!selectedFile) { alert('请先选择文件！'); return; }
+      const chunkSize = parseInt(chunkEl.value, 10);
+      const totalChunks = Math.max(1, Math.ceil(selectedFile.size / chunkSize));
+      const start1 = parseInt(document.getElementById('resumeStartInput').value, 10) || 1;
+      const startIdx = Math.max(0, Math.min(totalChunks - 1, start1 - 1));
+      const pk = [];
+      for (let c = startIdx; c < totalChunks; c++) pk.push({ type: PacketType.FILE_DATA, payload: chunkPayload(c, chunkSize, totalChunks), desc: '续传分卷 [' + (c + 1) + '/' + totalChunks + ']' });
+      pk.push(endPacket());
+      const ok = await transmit(pk, '续传', { showProgress: true });
+      if (ok) document.getElementById('txStatus').textContent = '✓ 从分卷 #' + (startIdx + 1) + ' 续传完成！';
+    });
+
+    updateFileInfo();
+  </script>
+</body>
+</html>
